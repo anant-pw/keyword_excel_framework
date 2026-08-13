@@ -108,8 +108,22 @@ pipeline {
     }
 
     post {
-        always {
-            archiveArtifacts artifacts: 'reports/**, logs/**', allowEmptyArchive: true, fingerprint: false
-        }
-    }
+    always {
+        archiveArtifacts(
+            artifacts: 'reports/**, logs/**',
+            allowEmptyArchive: true,
+            fingerprint: false
+        )
+
+        publishHTML([
+            allowMissing: true,
+            alwaysLinkToLastBuild: true,
+            keepAll: true,
+            reportDir: 'reports',
+            reportFiles: 'report_*.html',
+            reportName: 'Execution Report',
+            reportTitles: 'Keyword Framework - Execution Report'
+        ])
+			}
+	}
 }
