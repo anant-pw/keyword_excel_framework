@@ -1,0 +1,31 @@
+# Test Scenario -> owner mapping used for report/email routing (see
+# core/owners_loader.py). Keys must match the Test Scenario column in
+# testsheets/TestSuite.xlsx exactly (case-insensitive). A scenario that
+# runs but has no entry here reports as "Unowned" and logs a warning - it
+# never fails the run.
+owners:
+  "Search Flow": "search-module@example.com"
+  "Second Search": "search-module@example.com"
+  "Third Search": "search-module@example.com"
+  "External Site Check": "search-module@example.com"
+  "Parallel A": "search-module@example.com"
+  "Parallel B": "search-module@example.com"
+  "Parallel C": "search-module@example.com"
+
+  "Establish And Save Session": "auth-module@example.com"
+  "Reuse Saved Session": "auth-module@example.com"
+
+  "Get Post And Verify": "api-module@example.com"
+  "Create Post And Verify": "api-module@example.com"
+  "Api To Ui Handoff": "api-module@example.com"
+  "Restful Booker Full CRUD": "api-module@example.com"
+  "Dummyjson Auth And Product Crud": "api-module@example.com"
+  "Booking Schema Contract": "api-module@example.com"
+  "Inline Schema Check": "api-module@example.com"
+  "Product Schema Contract": "api-module@example.com"
+
+  # "Schema Contract Violation Demo" intentionally left unmapped - it's
+  # the SchemaContractDemo sheet's one intentional-failure case
+  # (Suite=Sanity only), and leaving it out demonstrates the "Unowned"
+  # fallback path on a case that's SUPPOSED to fail. Seeing it show up as
+  # Unowned + FAIL together in reports/email is expected, not a bug.

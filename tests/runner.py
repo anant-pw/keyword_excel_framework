@@ -44,6 +44,8 @@ from core.exceptions import FrameworkError
 from core.logger import get_logger, current_log_file
 from core.report_generator import generate_html_report, CaseResult, StepResult
 from core.allure_reporter import generate_allure_results
+from core.owners_loader import load_owners, warn_unmapped_scenarios
+from core.notifier import build_summary_workbook, send_report_email, resolve_executed_by
 
 logger = get_logger("runner")
 
@@ -335,13 +337,22 @@ def main():
         results = _run_sequential(test_cases, config, fail_fast)
         log_paths = [str(current_log_file())]
 
-    report_path = generate_html_report(results, config.report_dir, run_started, config.suite, config.history_limit,
-                                        log_paths=log_paths)
-    logger.info(f"Report generated: {report_path}")
-    
-    allure_results_path = generate_allure_results(results, config.report_dir, config.suite,)
+    executed_by = resolve_executed_by()
+    owners = load_owners(config.owners_file)
+    warn_unmapped_scenarios(owners, [r.test_scenario for r in results])
 
+    report_path = generate_html_report(results, config.report_dir, run_started, config.suite, config.history_limit,
+                                        log_paths=log_paths, executed_by=executed_by, owners=owners)
+    logger.info(f"Report generated: {report_path}")
+
+    allure_results_path = generate_allure_results(results, config.report_dir, config.suite)
     logger.info(f"Allure results generated: {allure_results_path}")
+
+    summary_path = build_summary_workbook(results, config.report_dir, run_started, config.suite,
+                                           executed_by, owners)
+    logger.info(f"Summary workbook generated: {summary_path}")
+
+    send_report_email(config, results, report_path, summary_path, run_started, config.suite, executed_by, owners)
 
     failed_count = sum(1 for r in results if r.status == "FAIL")
     logger.info(f"=== Run complete: {len(results)} case(s), {failed_count} failed ===")

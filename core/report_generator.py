@@ -16,6 +16,8 @@ import html
 import json
 import re
 
+from core.owners_loader import resolve_owner
+
 # Cap per log file embedded into the report. Debug-level file logs can get
 # large on a long run; we keep the TAIL (most recent entries - closest to
 # whatever failed) rather than the head, and say so when truncated.
@@ -77,6 +79,7 @@ table.steps { width:100%; border-collapse:collapse; display:none;}
 .shot { margin-top:6px; }
 .shot img { max-width:220px; border:1px solid #ddd; border-radius:4px; cursor:zoom-in; }
 .composite-tag { font-size:10px; color:#2f5496; border:1px solid #b7c6e6; background:#eef2fa; border-radius:8px; padding:1px 6px; margin-left:6px;}
+.owner-tag { font-size:10px; color:#8a5a00; border:1px solid #e6c78a; background:#fff6e6; border-radius:10px; padding:3px 8px; margin-left:8px;}
 tr.composite-row { cursor:pointer; }
 tr.composite-row .arrow { display:inline-block; width:10px; font-size:10px; color:#2f5496; }
 tr.nested-wrap { display:none; }
@@ -400,15 +403,22 @@ def _render_log_file(path_str: str) -> str:
 
 
 def generate_html_report(results: list, report_dir: str, run_started: datetime, suite: str,
-                          history_limit: int = 10, log_paths: list = None) -> Path:
+                          history_limit: int = 10, log_paths: list = None,
+                          executed_by: str = "", owners: dict = None) -> Path:
     """log_paths: every log file belonging to this run - the main
     process's own file, plus one per worker process when --workers > 1
     (each worker writes its own file - see core/logger.py's per-PID
     naming - so a parallel run's step-by-step detail lives across several
     files, not one). tests/runner.py::main() collects these and passes
     them through; defaults to none for callers/tests that don't care
-    about the Logs page."""
+    about the Logs page.
+
+    executed_by/owners are optional (see core/notifier.py resp.
+    core/owners_loader.py) - a caller that doesn't pass them just gets a
+    report with no "Executed by" line and no owner tags, same as before
+    this feature existed."""
     log_paths = log_paths or []
+    owners = owners or {}
     total = len(results)
     passed = sum(1 for r in results if r.status == "PASS")
     failed = total - passed
@@ -425,10 +435,12 @@ def generate_html_report(results: list, report_dir: str, run_started: datetime, 
     rows_html = []
     for r in results:
         step_rows = "".join(_render_step_row(s) for s in r.step_results)
+        owner = resolve_owner(owners, r.test_scenario, warn=False)
+        owner_html = f"<span class='owner-tag'>{html.escape(owner)}</span>"
         rows_html.append(f"""
         <div class="case">
           <div class="case-header {r.status}">
-            <div><strong>{html.escape(r.test_scenario)}</strong></div>
+            <div><strong>{html.escape(r.test_scenario)}</strong>{owner_html}</div>
             <span class="badge {r.status}">{r.status}</span>
           </div>
           <table class="steps">
@@ -460,7 +472,7 @@ def generate_html_report(results: list, report_dir: str, run_started: datetime, 
 
   <main class="content">
     <h1>Keyword Framework - Execution Report</h1>
-    <div class="meta">Run started: {run_started.strftime('%Y-%m-%d %H:%M:%S')} | Suite: {html.escape(suite)}</div>
+    <div class="meta">Run started: {run_started.strftime('%Y-%m-%d %H:%M:%S')} | Suite: {html.escape(suite)} | Executed by: {html.escape(executed_by) if executed_by else 'unknown'}</div>
 
     <div class="page active" id="page-results">
       <div class="summary">

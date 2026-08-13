@@ -28,3 +28,26 @@ viewport_height: 900
 # over this block automatically, see core/properties_loader.py.
 env_variables:
   searchTerm: "Playwright automation"
+
+# Test Scenario -> owner mapping for report/email routing, see
+# core/owners_loader.py. Kept in its own file, not a TestSuite.xlsx column,
+# since ownership changes independently of test steps.
+owners_file: config/owners.yaml
+
+# Post-run notification email (core/notifier.py). Disabled by default -
+# flip enabled: true and fill in smtp_host/from_address/to_addresses to
+# turn it on. The SMTP password is NEVER read from this file - set
+# SMTP_PASSWORD as an OS/CI secret env var instead (same pattern as
+# {{VAR}} secrets in properties/*.properties).
+email:
+  enabled: false
+  smtp_host: ""
+  smtp_port: 587
+  smtp_user: ""
+  from_address: ""
+  to_addresses: []
+  send_on: failure_only        # failure_only | always - failure_only avoids alert fatigue on green runs
+  attach_report: true          # attach the HTML report file directly (see notifier.py docstring on why
+  attach_summary: true         # not just a link) rather than the full HTML/xlsx
+  cc_owners_on_failure: true   # CC each failed scenario's owner (from owners_file), in addition to to_addresses
+  report_base_url: ""          # optional - only set once reports are actually published somewhere reachable

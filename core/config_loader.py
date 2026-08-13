@@ -30,6 +30,18 @@ class RunConfig:
     history_limit: int = 10
     workers: int = 1
     env_variables: dict = field(default_factory=dict)
+    owners_file: str = "config/owners.yaml"
+    email_enabled: bool = False
+    email_smtp_host: str = ""
+    email_smtp_port: int = 587
+    email_smtp_user: str = ""
+    email_from: str = ""
+    email_to: list = field(default_factory=list)
+    email_send_on: str = "failure_only"       # failure_only | always
+    email_attach_report: bool = True
+    email_attach_summary: bool = True
+    email_cc_owners_on_failure: bool = True
+    email_report_base_url: str = ""
 
 
 def load_config(path: Path = _CONFIG_PATH) -> RunConfig:
@@ -57,4 +69,16 @@ def load_config(path: Path = _CONFIG_PATH) -> RunConfig:
         history_limit=raw.get("history_limit", 10),
         workers=raw.get("workers", 1),
         env_variables=raw.get("env_variables", {}) or {},
+        owners_file=raw.get("owners_file", "config/owners.yaml"),
+        email_enabled=(raw.get("email", {}) or {}).get("enabled", False),
+        email_smtp_host=(raw.get("email", {}) or {}).get("smtp_host", ""),
+        email_smtp_port=(raw.get("email", {}) or {}).get("smtp_port", 587),
+        email_smtp_user=(raw.get("email", {}) or {}).get("smtp_user", ""),
+        email_from=(raw.get("email", {}) or {}).get("from_address", ""),
+        email_to=(raw.get("email", {}) or {}).get("to_addresses", []) or [],
+        email_send_on=(raw.get("email", {}) or {}).get("send_on", "failure_only"),
+        email_attach_report=(raw.get("email", {}) or {}).get("attach_report", True),
+        email_attach_summary=(raw.get("email", {}) or {}).get("attach_summary", True),
+        email_cc_owners_on_failure=(raw.get("email", {}) or {}).get("cc_owners_on_failure", True),
+        email_report_base_url=(raw.get("email", {}) or {}).get("report_base_url", ""),
     )
