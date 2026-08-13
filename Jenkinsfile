@@ -32,6 +32,10 @@
 			timestamps()
 			disableConcurrentBuilds()
 		}
+		
+		environment {
+			SMTP_PASSWORD = credentials('smtp-password')
+		}
 
 		stages {
 			stage('Determine suite') {
