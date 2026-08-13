@@ -50,20 +50,25 @@ pipeline {
         }
 
         stage('Clean workspace') {
-            steps { cleanWs() }
+            steps {
+                cleanWs()
+            }
         }
 
         stage('Checkout') {
-            steps { checkout scm }
+            steps {
+                checkout scm
+            }
         }
 
         stage('Install dependencies') {
             steps {
-                sh '''
-                    python3 -m venv .venv
-                    . .venv/bin/activate
+                bat '''
+                    py -m venv .venv
+                    call .venv\\Scripts\\activate.bat
+                    python -m pip install --upgrade pip
                     pip install -r requirements.txt
-                    playwright install --with-deps chromium
+                    python -m playwright install chromium
                 '''
             }
         }
@@ -79,9 +84,9 @@ pipeline {
                     // being the right one once real test volume grows.
                     def sheets = ['TestSteps', 'ParallelDemo', 'ApiDemo', 'RestfulBookerDemo', 'DummyJsonDemo', 'SchemaContractDemo']
                     for (sheet in sheets) {
-                        sh """
-                            . .venv/bin/activate
-                            python tests/runner.py --sheet-name ${sheet} --suite ${env.SUITE} --workers 2
+                        bat """
+                            call .venv\\Scripts\\activate.bat
+                            python tests\\runner.py --sheet-name ${sheet} --suite ${env.SUITE} --workers 2
                         """
                     }
                 }
@@ -93,10 +98,10 @@ pipeline {
                 // SessionSave then SessionReuse, same reasoning as the
                 // GitHub Actions job of the same name - these can't be in
                 // the sheets list above because order matters between them.
-                sh """
-                    . .venv/bin/activate
-                    python tests/runner.py --sheet-name SessionSave --suite ${env.SUITE}
-                    python tests/runner.py --sheet-name SessionReuse --suite ${env.SUITE}
+                bat """
+                    call .venv\\Scripts\\activate.bat
+                    python tests\\runner.py --sheet-name SessionSave --suite ${env.SUITE}
+                    python tests\\runner.py --sheet-name SessionReuse --suite ${env.SUITE}
                 """
             }
         }
