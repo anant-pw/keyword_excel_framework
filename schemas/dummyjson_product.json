@@ -1,0 +1,24 @@
+{
+  "$comment": "Contract for GET https://dummyjson.com/products/{id}. Only the fields this framework's demo sheets actually depend on are required - a real contract should track what you rely on, not every field the provider happens to return today. Adding a new optional field to the API shouldn't break this; removing 'price' or changing its type should.",
+  "type": "object",
+  "required": ["id", "title", "price", "category", "stock", "brand", "reviews"],
+  "properties": {
+    "id": { "type": "integer" },
+    "title": { "type": "string" },
+    "price": { "type": "number" },
+    "category": { "type": "string" },
+    "stock": { "type": "integer" },
+    "brand": { "type": "string" },
+    "reviews": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["rating", "comment"],
+        "properties": {
+          "rating": { "type": "number", "minimum": 1, "maximum": 5 },
+          "comment": { "type": "string" }
+        }
+      }
+    }
+  }
+}

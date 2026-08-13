@@ -1,0 +1,113 @@
+name: Test Suite
+
+# Three triggers, one shared suite-selection rule:
+#   push / pull_request -> Smoke        (fast feedback on every change)
+#   schedule (nightly)   -> Regression  (the fuller suite, off the critical path)
+#   workflow_dispatch     -> your choice, defaults to Smoke
+#
+# Runs every sheet the repo currently has, not just TestSteps - ParallelDemo,
+# ApiDemo, and RestfulBookerDemo would otherwise never run in CI and nobody
+# would notice if one broke. SessionSave/SessionReuse are NOT in that matrix -
+# see the session-demo job below for why they need their own job instead.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    - cron: "0 2 * * *"   # 02:00 UTC nightly
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Suite to run"
+        type: choice
+        default: Smoke
+        options: [Smoke, Regression]
+
+jobs:
+  determine-suite:
+    runs-on: ubuntu-latest
+    outputs:
+      suite: ${{ steps.pick.outputs.suite }}
+    steps:
+      - id: pick
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "suite=Regression" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "suite=${{ inputs.suite }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "suite=Smoke" >> "$GITHUB_OUTPUT"
+          fi
+
+  test-sheets:
+    needs: determine-suite
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false   # one sheet failing shouldn't hide results from the others
+      matrix:
+        sheet: [TestSteps, ParallelDemo, ApiDemo, RestfulBookerDemo, DummyJsonDemo, SchemaContractDemo]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Run ${{ matrix.sheet }} (${{ needs.determine-suite.outputs.suite }})
+        run: >
+          python tests/runner.py
+          --sheet-name ${{ matrix.sheet }}
+          --suite ${{ needs.determine-suite.outputs.suite }}
+          --workers 2
+
+      - name: Upload report and logs
+        if: always()   # upload even when the run step above failed - that's when you need it most
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-${{ matrix.sheet }}-${{ github.run_id }}
+          path: |
+            reports/
+            logs/
+          retention-days: 14
+
+  test-session-demo:
+    # SessionSave and SessionReuse are two DIFFERENT sheets by design (see
+    # core/session_manager.py's preflight check) precisely so they can't be
+    # accidentally run out of order - which means they can't go in the
+    # matrix above; they have to run as two ordered steps in ONE job, on
+    # the same runner, so sessions/duckduckgoDemo.json written by the
+    # first step is still on disk for the second.
+    needs: determine-suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Run SessionSave (writes the session file this job needs)
+        run: python tests/runner.py --sheet-name SessionSave --suite ${{ needs.determine-suite.outputs.suite }}
+
+      - name: Run SessionReuse (reads the file the previous step wrote)
+        run: python tests/runner.py --sheet-name SessionReuse --suite ${{ needs.determine-suite.outputs.suite }}
+
+      - name: Upload report and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-session-demo-${{ github.run_id }}
+          path: |
+            reports/
+            logs/
+          retention-days: 14

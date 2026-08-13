@@ -1,0 +1,14 @@
+# Runtime artifacts - regenerated every run, never committed. sessions/*.json
+# specifically must never be committed even by accident: it's cookie/auth
+# state from a real run (see core/session_manager.py).
+logs/
+reports/
+sessions/*.json
+
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+.venv/
+venv/

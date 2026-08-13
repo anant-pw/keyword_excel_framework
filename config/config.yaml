@@ -1,0 +1,30 @@
+# Runtime configuration for the keyword-driven framework.
+
+browser: chromium              # chromium | firefox | webkit
+headless: true
+base_url: ""                   # left blank - each Navigate step uses a full URL
+default_timeout_ms: 15000
+slow_mo_ms: 0
+
+# Which Suite from the Excel sheet this run should execute.
+# Smoke              -> fail-fast: stop the test case on first step failure
+# Sanity / Regression -> continue-on-failure: run all steps, mark case failed at the end
+suite: Regression
+
+test_sheet_file: testsheets/TestSuite.xlsx
+properties_dir: properties
+common_dir: common
+report_dir: reports
+screenshot_on_failure: true
+history_limit: 10
+workers: 1                     # >1 runs test cases across parallel worker processes
+
+viewport_width: 1440
+viewport_height: 900
+
+# Demo/local fallback values for {{VAR}} tokens inside properties/*.properties
+# files. In CI, the same {{VAR}} names should instead be set as real OS
+# environment variables (e.g. GitHub Actions secrets) - those take priority
+# over this block automatically, see core/properties_loader.py.
+env_variables:
+  searchTerm: "Playwright automation"

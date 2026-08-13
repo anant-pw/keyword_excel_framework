@@ -1,0 +1,20 @@
+{
+  "$comment": "Contract for GET https://restful-booker.herokuapp.com/booking/{id}. Note this is the UNWRAPPED booking object - POST /booking returns {bookingid, booking:{...}}, but GET /booking/{id} returns the booking fields directly at the top level. Mixing those two shapes up is a real, easy mistake - this schema exists partly to catch exactly that mistake if a sheet author points it at the wrong response.",
+  "type": "object",
+  "required": ["firstname", "lastname", "totalprice", "depositpaid", "bookingdates"],
+  "properties": {
+    "firstname": { "type": "string" },
+    "lastname": { "type": "string" },
+    "totalprice": { "type": "number" },
+    "depositpaid": { "type": "boolean" },
+    "bookingdates": {
+      "type": "object",
+      "required": ["checkin", "checkout"],
+      "properties": {
+        "checkin": { "type": "string", "format": "date" },
+        "checkout": { "type": "string", "format": "date" }
+      }
+    },
+    "additionalneeds": { "type": "string" }
+  }
+}
