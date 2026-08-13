@@ -43,6 +43,7 @@ from core.session_manager import extract_session_directive, preflight_check_sess
 from core.exceptions import FrameworkError
 from core.logger import get_logger, current_log_file
 from core.report_generator import generate_html_report, CaseResult, StepResult
+from core.allure_reporter import generate_allure_results
 
 logger = get_logger("runner")
 
@@ -337,6 +338,10 @@ def main():
     report_path = generate_html_report(results, config.report_dir, run_started, config.suite, config.history_limit,
                                         log_paths=log_paths)
     logger.info(f"Report generated: {report_path}")
+    
+    allure_results_path = generate_allure_results(results, config.report_dir, config.suite,)
+
+    logger.info(f"Allure results generated: {allure_results_path}")
 
     failed_count = sum(1 for r in results if r.status == "FAIL")
     logger.info(f"=== Run complete: {len(results)} case(s), {failed_count} failed ===")
