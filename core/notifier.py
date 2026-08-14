@@ -104,82 +104,241 @@ def build_summary_workbook(results: list, report_dir: str, run_started: datetime
 
 def send_report_email(config, results: list, report_path, summary_path,
                        run_started: datetime, suite: str, executed_by: str, owners: dict) -> bool:
-    """Returns True only if an email was actually handed to the SMTP
-    server successfully. False covers both "intentionally skipped"
-    (disabled, or send_on=failure_only with a clean run) and "attempted
-    but failed" - failures are logged, never raised, because a broken
-    mail server must not fail an otherwise-green build."""
+    """Send one build-level notification containing the aggregated run results."""
     if not config.email_enabled:
         return False
 
     failed = sum(1 for r in results if r.status == "FAIL")
+    passed = sum(1 for r in results if r.status == "PASS")
+    total = len(results)
+
     if config.email_send_on == "failure_only" and failed == 0:
         logger.info("email.send_on=failure_only and every case passed - skipping notification email.")
         return False
 
     if not config.email_smtp_host or not config.email_from or not config.email_to:
-        logger.warning("email.enabled is true but smtp_host/from_address/to_addresses is incomplete - "
-                        "skipping notification email.")
+        logger.warning(
+            "email.enabled is true but smtp_host/from_address/to_addresses is incomplete - "
+            "skipping notification email."
+        )
         return False
 
     status_word = "FAILED" if failed else "PASSED"
-    subject = f"[{status_word}] {suite} run - {len(results)} case(s), {failed} failed - run by {executed_by}"
+    subject = (
+        f"[{status_word}] {suite} run - {total} case(s), "
+        f"{failed} failed - run by {executed_by}"
+    )
 
-    failed_owners = sorted({
-        resolve_owner(owners, r.test_scenario, warn=False) for r in results
-        if r.status == "FAIL" and resolve_owner(owners, r.test_scenario, warn=False) != "Unowned"
-    })
-    cc_list = failed_owners if config.email_cc_owners_on_failure else []
+    def _source(case):
+        workbook = (
+            Path(getattr(case, "source_file", "")).name
+            if getattr(case, "source_file", "")
+            else "Unknown"
+        )
+        sheet = getattr(case, "source_sheet", "") or "Unknown"
+        return workbook, sheet
 
+    # ------------------------------------------------------------------
+    # Build workbook -> sheet -> cases structure for the email.
+    # Keep ordering stable while placing failed sheets/cases first.
+    # ------------------------------------------------------------------
+    grouped = {}
+    for case in results:
+        workbook, sheet = _source(case)
+        grouped.setdefault(workbook, {}).setdefault(sheet, []).append(case)
+
+    def _sheet_sort(item):
+        sheet_name, cases = item
+        failed_count = sum(1 for case in cases if case.status == "FAIL")
+        return (-failed_count, sheet_name.lower())
+
+    def _workbook_sort(item):
+        workbook_name, sheets = item
+        failed_count = sum(
+            1
+            for cases in sheets.values()
+            for case in cases
+            if case.status == "FAIL"
+        )
+        return (-failed_count, workbook_name.lower())
+
+    # ------------------------------------------------------------------
+    # Failed owner CCs: preserve existing behavior but de-duplicate and
+    # never duplicate an address already present in To.
+    # ------------------------------------------------------------------
+    configured_to = []
+    seen_to = set()
+    for address in config.email_to:
+        normalized = str(address).strip()
+        key = normalized.lower()
+        if normalized and key not in seen_to:
+            seen_to.add(key)
+            configured_to.append(normalized)
+
+    failed_owners = []
+    seen_cc = set()
+
+    if config.email_cc_owners_on_failure:
+        for case in results:
+            if case.status != "FAIL":
+                continue
+
+            owner = resolve_owner(owners, case.test_scenario, warn=False)
+            if owner == "Unowned":
+                continue
+
+            normalized = str(owner).strip()
+            key = normalized.lower()
+
+            if normalized and key not in seen_to and key not in seen_cc:
+                seen_cc.add(key)
+                failed_owners.append(normalized)
+
+    cc_list = failed_owners
+
+    # ------------------------------------------------------------------
+    # Plain-text email body
+    # ------------------------------------------------------------------
     body_lines = [
         f"Run started: {run_started.strftime('%Y-%m-%d %H:%M:%S')}",
         f"Executed by: {executed_by}",
-        f"Total: {len(results)} | Passed: {len(results) - failed} | Failed: {failed}",
+        f"Total: {total} | Passed: {passed} | Failed: {failed}",
+        "",
+        "EXECUTION SUMMARY",
+        "=================",
         "",
     ]
-    if config.email_report_base_url:
-        body_lines.append(f"Report: {config.email_report_base_url.rstrip('/')}/{Path(report_path).name}")
-    body_lines.append("Full HTML report and per-scenario Excel summary are attached.")
-    if failed:
-        body_lines.append("")
-        body_lines.append("Failed scenarios and their owners:")
-        for r in results:
-            if r.status == "FAIL":
-                source_file = Path(getattr(r, "source_file", "")).name if getattr(r, "source_file", "") else "Unknown"
-                source_sheet = getattr(r, "source_sheet", "") or "Unknown"
+
+    if grouped:
+        for workbook, sheets in sorted(grouped.items(), key=_workbook_sort):
+            workbook_total = sum(len(cases) for cases in sheets.values())
+            workbook_failed = sum(
+                1
+                for cases in sheets.values()
+                for case in cases
+                if case.status == "FAIL"
+            )
+            workbook_passed = workbook_total - workbook_failed
+
+            body_lines.append(
+                f"{workbook}  |  Total: {workbook_total} | "
+                f"Passed: {workbook_passed} | Failed: {workbook_failed}"
+            )
+
+            for sheet, cases in sorted(sheets.items(), key=_sheet_sort):
+                sheet_total = len(cases)
+                sheet_failed = sum(1 for case in cases if case.status == "FAIL")
+                sheet_passed = sheet_total - sheet_failed
+
                 body_lines.append(
-                    f"  - [{source_sheet}] {r.test_scenario} "
-                    f"(workbook: {source_file}; owner: {resolve_owner(owners, r.test_scenario, warn=False)})"
+                    f"  └─ {sheet}  |  Total: {sheet_total} | "
+                    f"Passed: {sheet_passed} | Failed: {sheet_failed}"
                 )
+
+            body_lines.append("")
+
+    if config.email_report_base_url:
+        body_lines.append(
+            f"Report: {config.email_report_base_url.rstrip('/')}/{Path(report_path).name}"
+        )
+
+    body_lines.append("Full HTML report and per-scenario Excel summary are attached.")
+
+    # ------------------------------------------------------------------
+    # Failure section: workbook -> sheet -> failed cases
+    # ------------------------------------------------------------------
+    if failed:
+        body_lines.extend([
+            "",
+            "FAILED TEST CASES",
+            "=================",
+            "",
+        ])
+
+        failed_grouped = {}
+        for case in results:
+            if case.status != "FAIL":
+                continue
+
+            workbook, sheet = _source(case)
+            failed_grouped.setdefault(workbook, {}).setdefault(sheet, []).append(case)
+
+        for workbook, sheets in sorted(failed_grouped.items(), key=_workbook_sort):
+            body_lines.append(f"{workbook}")
+
+            for sheet, cases in sorted(sheets.items(), key=_sheet_sort):
+                body_lines.append(f"  {sheet}")
+
+                for case in cases:
+                    owner = resolve_owner(
+                        owners,
+                        case.test_scenario,
+                        warn=False,
+                    )
+                    body_lines.append(
+                        f"    • {case.test_scenario}"
+                    )
+                    body_lines.append(
+                        f"      Owner: {owner}"
+                    )
+
+                body_lines.append("")
 
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = config.email_from
-    msg["To"] = ", ".join(config.email_to)
+    msg["To"] = ", ".join(configured_to)
+
     if cc_list:
         msg["Cc"] = ", ".join(cc_list)
+
     msg.set_content("\n".join(body_lines))
 
     if config.email_attach_report and report_path and Path(report_path).exists():
-        msg.add_attachment(Path(report_path).read_bytes(), maintype="text", subtype="html",
-                            filename=Path(report_path).name)
+        msg.add_attachment(
+            Path(report_path).read_bytes(),
+            maintype="text",
+            subtype="html",
+            filename=Path(report_path).name,
+        )
+
     if config.email_attach_summary and summary_path and Path(summary_path).exists():
         msg.add_attachment(
             Path(summary_path).read_bytes(),
-            maintype="application", subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            maintype="application",
+            subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             filename=Path(summary_path).name,
         )
 
-    all_recipients = list(config.email_to) + cc_list
+    all_recipients = configured_to + cc_list
     password = os.environ.get("SMTP_PASSWORD", "")
+
     try:
-        with smtplib.SMTP(config.email_smtp_host, config.email_smtp_port, timeout=20) as server:
+        with smtplib.SMTP(
+            config.email_smtp_host,
+            config.email_smtp_port,
+            timeout=20,
+        ) as server:
             server.starttls()
+
             if config.email_smtp_user:
-                server.login(config.email_smtp_user, password)
-            server.send_message(msg, to_addrs=all_recipients)
-        logger.info(f"Notification email sent to {all_recipients}")
+                server.login(
+                    config.email_smtp_user,
+                    password,
+                )
+
+            server.send_message(
+                msg,
+                to_addrs=all_recipients,
+            )
+
+        logger.info(
+            f"Notification email sent to {all_recipients}"
+        )
         return True
+
     except Exception as e:
-        logger.error(f"Failed to send notification email: {e}")
+        logger.error(
+            f"Failed to send notification email: {e}"
+        )
         return False
