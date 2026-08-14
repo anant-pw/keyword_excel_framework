@@ -50,6 +50,27 @@ h2 { font-size:15px; margin:0 0 14px; color:#333;}
 .nav-item.active { background:#2f5496; color:#fff; }
 .nav-icon { width:16px; text-align:center; flex-shrink:0; }
 
+/* ---- workbook / sheet navigation ---- */
+.sheet-nav { margin:0 0 10px; padding-bottom:6px; border-bottom:1px solid #343a4a; }
+.sheet-nav-title { padding:4px 18px 8px; font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:#8b93a8; font-weight:700; }
+.workbook-nav { margin:0; }
+.workbook-nav-item { padding:9px 12px 9px 18px; cursor:pointer; font-size:12px; display:flex; align-items:center; justify-content:space-between; gap:8px; color:#fff; white-space:nowrap; }
+.workbook-nav-item:hover { background:#2a3040; }
+.workbook-nav-left { display:flex; align-items:center; gap:7px; min-width:0; }
+.workbook-toggle { width:12px; text-align:center; color:#aeb5c6; flex-shrink:0; }
+.workbook-name { overflow:hidden; text-overflow:ellipsis; }
+.workbook-count { font-size:10px; color:#b9c0cf; flex-shrink:0; }
+.workbook-count.fail { color:#ff9f9f; font-weight:700; }
+.sheet-nav-children { display:block; }
+.workbook-nav.collapsed .sheet-nav-children { display:none; }
+.sheet-nav-item { padding:7px 10px 7px 35px; cursor:pointer; font-size:11px; white-space:nowrap; display:flex; align-items:center; justify-content:space-between; gap:6px; color:#cfd4e0; }
+.sheet-nav-item:hover { background:#2a3040; color:#fff; }
+.sheet-nav-item.active { background:#364c78; color:#fff; }
+.sheet-nav-left { min-width:0; overflow:hidden; }
+.sheet-nav-name { overflow:hidden; text-overflow:ellipsis; }
+.sheet-nav-count { font-size:9px; color:#9fa7b8; flex-shrink:0; }
+.sheet-nav-fail { color:#ff9f9f !important; font-weight:700; }
+
 /* ---- main content ---- */
 .content { flex:1; padding:24px; min-width:0; }
 .page { display:none; }
@@ -169,40 +190,43 @@ document.querySelectorAll('.case-header').forEach(h => {
   h.addEventListener('click', () => h.parentElement.classList.toggle('open'));
 });
 
-// ---- Excel sheet navigation ----
+// ---- Excel workbook / sheet navigation ----
 const sheetItems = document.querySelectorAll('.sheet-nav-item');
 const sheetGroups = document.querySelectorAll('.sheet-group');
 const sheetFilterNote = document.getElementById('sheetFilterNote');
+
+document.querySelectorAll('.workbook-nav-item').forEach(item => {
+  item.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const wrapper = item.parentElement;
+    wrapper.classList.toggle('collapsed');
+    const toggle = item.querySelector('.workbook-toggle');
+    if (toggle) toggle.innerHTML = wrapper.classList.contains('collapsed') ? '&#9654;' : '&#9660;';
+  });
+});
+
 sheetItems.forEach(item => {
   item.addEventListener('click', () => {
     const filter = item.dataset.sheetFilter;
+    const workbookFilter = item.dataset.workbookFilter;
     sheetItems.forEach(i => i.classList.remove('active'));
     item.classList.add('active');
     sheetGroups.forEach(group => {
-      group.style.display = (filter === '__ALL__' || group.dataset.sheet === filter) ? '' : 'none';
+      let visible = false;
+      if (filter === '__ALL__') visible = true;
+      else if (filter === '__WORKBOOK_ALL__') visible = group.dataset.workbook === workbookFilter;
+      else visible = group.dataset.workbook === workbookFilter && group.dataset.sheet === filter;
+      group.style.display = visible ? '' : 'none';
     });
     if (sheetFilterNote) {
-      sheetFilterNote.textContent = filter === '__ALL__'
-        ? 'Showing all sheets. Failed sheets and failed cases are shown first.'
-        : 'Showing sheet: ' + filter + '. Failed cases are shown first.';
+      if (filter === '__ALL__') sheetFilterNote.textContent = 'Showing all workbooks and sheets. Failed workbooks, sheets and cases are shown first.';
+      else if (filter === '__WORKBOOK_ALL__') sheetFilterNote.textContent = 'Showing workbook: ' + workbookFilter + '. Failed sheets and cases are shown first.';
+      else sheetFilterNote.textContent = 'Showing sheet: ' + filter + ' | Workbook: ' + workbookFilter + '. Failed cases are shown first.';
     }
     document.querySelector('.nav-item[data-page="results"]').click();
   });
 });
 
-document.querySelectorAll('.sheet-group-header').forEach(header => {
-  header.addEventListener('click', () => {
-    const group = header.parentElement;
-    group.classList.toggle('collapsed');
-    const toggle = header.querySelector('.sheet-toggle');
-    if (toggle) toggle.innerHTML = group.classList.contains('collapsed') ? '&#9654;' : '&#9660;';
-  });
-});
-
-document.querySelectorAll('.sheet-group').forEach(group => {
-  const header = group.querySelector('.sheet-group-header');
-  if (!header.classList.contains('fail')) group.classList.add('collapsed');
-});
 document.querySelectorAll('tr.composite-row, tr.log-row').forEach(row => {
   row.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -633,49 +657,83 @@ def generate_html_report(results: list, report_dir: str, run_started: datetime, 
             source_html, r.status, r.status, step_rows
         )
 
-    def group_key(item):
+    def sheet_group_key(item):
         sheet, cases = item
         failed_cases = sum(1 for c in cases if c.status == "FAIL")
         return (0 if failed_cases else 1, -failed_cases, sheet.lower())
 
-    ordered_groups = sorted(sheet_groups.items(), key=group_key)
+    # Group results as Workbook -> Sheet -> Test cases.
+    workbook_groups = {}
+    for result in report_results:
+        workbook = Path(result.source_file).name if result.source_file else "Unknown workbook"
+        sheet = result.source_sheet or "Unknown sheet"
+        workbook_groups.setdefault(workbook, {})
+        workbook_groups[workbook].setdefault(sheet, []).append(result)
+
+    def workbook_group_key(item):
+        workbook, sheets = item
+        failed_cases = sum(1 for cases in sheets.values() for c in cases if c.status == "FAIL")
+        return (0 if failed_cases else 1, -failed_cases, workbook.lower())
+
+    ordered_workbooks = sorted(workbook_groups.items(), key=workbook_group_key)
     group_html = []
     sidebar_html = []
 
     sidebar_html.append(
-        f"<div class='sheet-nav-item active' data-sheet-filter='__ALL__'>"
+        f"<div class='sheet-nav-item active' data-sheet-filter='__ALL__' data-workbook-filter='__ALL__'>"
         f"<span class='sheet-nav-left'><span>All Sheets</span></span>"
         f"<span class='sheet-nav-count{' sheet-nav-fail' if failed else ''}'>{len(report_results)}"
         f"{(' / ' + str(failed) + ' fail') if failed else ''}</span></div>"
     )
 
-    for index, (sheet_name, cases) in enumerate(ordered_groups):
-        failed_cases = sum(1 for c in cases if c.status == "FAIL")
-        passed_cases = sum(1 for c in cases if c.status == "PASS")
-        ordered_cases = sorted(cases, key=lambda c: (c.status != "FAIL", c.test_scenario.lower()))
-        group_class = "fail" if failed_cases else "pass"
-        fail_banner = "<div class='fail-banner'>Failed test cases are shown first in this sheet.</div>" if failed_cases else ""
-        case_html = "".join(_case_html(c) for c in ordered_cases)
-        group_html.append(
-            f"""<section class="sheet-group" data-sheet="{html.escape(sheet_name, quote=True)}" id="sheet-{index}">
-              <div class="sheet-group-header {group_class}">
-                <div>
-                  <div class="sheet-group-title">{html.escape(sheet_name)}</div>
-                  <div class="sheet-group-meta">{len(cases)} test case(s) &nbsp;|&nbsp; {passed_cases} passed &nbsp;|&nbsp; {failed_cases} failed</div>
-                </div>
-                <span class="sheet-toggle">{'&#9660;' if failed_cases else '&#9654;'}</span>
-              </div>
-              <div class="sheet-group-body">
-                {fail_banner}
-                {case_html}
-              </div>
-            </section>"""
-        )
+    for wb_index, (workbook_name, sheets) in enumerate(ordered_workbooks):
+        workbook_cases = [c for cases in sheets.values() for c in cases]
+        workbook_failed = sum(1 for c in workbook_cases if c.status == "FAIL")
+        workbook_failed_label = f" / {workbook_failed} fail" if workbook_failed else ""
+        initially_collapsed = "" if workbook_failed else " collapsed"
+
+        wb_sheet_sidebar = [
+            f"<div class='sheet-nav-item' data-sheet-filter='__WORKBOOK_ALL__' data-workbook-filter='{html.escape(workbook_name, quote=True)}'>"
+            f"<span class='sheet-nav-left'><span class='sheet-nav-name'>All sheets</span></span>"
+            f"<span class='sheet-nav-count{' sheet-nav-fail' if workbook_failed else ''}'>{len(workbook_cases)}{workbook_failed_label}</span></div>"
+        ]
+
+        for sheet_index, (sheet_name, cases) in enumerate(sorted(sheets.items(), key=sheet_group_key)):
+            failed_cases = sum(1 for c in cases if c.status == "FAIL")
+            passed_cases = sum(1 for c in cases if c.status == "PASS")
+            ordered_cases = sorted(cases, key=lambda c: (c.status != "FAIL", c.test_scenario.lower()))
+            group_class = "fail" if failed_cases else "pass"
+            fail_banner = "<div class='fail-banner'>Failed test cases are shown first in this sheet.</div>" if failed_cases else ""
+            case_html = "".join(_case_html(c) for c in ordered_cases)
+
+            group_html.append(
+                f"""<section class="sheet-group workbook-group-{wb_index}" data-workbook="{html.escape(workbook_name, quote=True)}" data-sheet="{html.escape(sheet_name, quote=True)}" id="sheet-{wb_index}-{sheet_index}">
+                    <div class="sheet-group-header {group_class}">
+                      <div>
+                        <div class="sheet-group-title">{html.escape(sheet_name)}</div>
+                        <div class="sheet-group-meta">{len(cases)} test case(s) &nbsp;|&nbsp; {passed_cases} passed &nbsp;|&nbsp; {failed_cases} failed</div>
+                      </div>
+                      <span class="sheet-toggle">{'&#9660;' if failed_cases else '&#9654;'}</span>
+                    </div>
+                    <div class="sheet-group-body">{fail_banner}{case_html}</div>
+                  </section>"""
+            )
+
+            wb_sheet_sidebar.append(
+                f"<div class='sheet-nav-item' data-sheet-filter='{html.escape(sheet_name, quote=True)}' data-workbook-filter='{html.escape(workbook_name, quote=True)}'>"
+                f"<span class='sheet-nav-left'><span class='sheet-nav-name'>{html.escape(sheet_name)}</span></span>"
+                f"<span class='sheet-nav-count{' sheet-nav-fail' if failed_cases else ''}'>{len(cases)}"
+                f"{(' / ' + str(failed_cases) + ' fail') if failed_cases else ''}</span></div>"
+            )
+
         sidebar_html.append(
-            f"<div class='sheet-nav-item' data-sheet-filter='{html.escape(sheet_name, quote=True)}'>"
-            f"<span class='sheet-nav-left'><span class='sheet-nav-name'>{html.escape(sheet_name)}</span></span>"
-            f"<span class='sheet-nav-count{' sheet-nav-fail' if failed_cases else ''}'>{len(cases)}"
-            f"{(' / ' + str(failed_cases) + ' fail') if failed_cases else ''}</span></div>"
+            f"""<div class='workbook-nav{initially_collapsed}' data-workbook='{html.escape(workbook_name, quote=True)}'>
+              <div class='workbook-nav-item' data-workbook-toggle='{html.escape(workbook_name, quote=True)}'>
+                <span class='workbook-nav-left'><span class='workbook-toggle'>{'&#9660;' if workbook_failed else '&#9654;'}</span><span class='workbook-name'>{html.escape(workbook_name)}</span></span>
+                <span class='workbook-count{' fail' if workbook_failed else ''}'>{len(workbook_cases)}{workbook_failed_label}</span>
+              </div>
+              <div class='sheet-nav-children'>{''.join(wb_sheet_sidebar)}</div>
+            </div>"""
         )
 
     grouped_results_html = "".join(group_html)
