@@ -76,7 +76,7 @@ def build_summary_workbook(results: list, report_dir: str, run_started: datetime
     ws.title = "Summary"
 
     headers = ["Test Scenario", "Status", "Owner", "Steps", "Duration (ms)",
-               "First Failure Message", "Executed By", "Run Started", "Suite"]
+               "First Failure Message", "Executed By", "Run Started", "Suite", "Workbook", "Sheet"]
     ws.append(headers)
     for cell in ws[1]:
         cell.font = Font(bold=True)
@@ -87,6 +87,8 @@ def build_summary_workbook(results: list, report_dir: str, run_started: datetime
             case.test_scenario, case.status, resolve_owner(owners, case.test_scenario, warn=False),
             len(case.step_results), case.duration_ms, first_fail,
             executed_by, run_started.strftime("%Y-%m-%d %H:%M:%S"), suite,
+            Path(case.source_file).name if getattr(case, "source_file", "") else "Unknown",
+            getattr(case, "source_sheet", "") or "Unknown",
         ])
 
     for col_cells in ws.columns:
@@ -143,7 +145,12 @@ def send_report_email(config, results: list, report_path, summary_path,
         body_lines.append("Failed scenarios and their owners:")
         for r in results:
             if r.status == "FAIL":
-                body_lines.append(f"  - {r.test_scenario}  (owner: {resolve_owner(owners, r.test_scenario, warn=False)})")
+                source_file = Path(getattr(r, "source_file", "")).name if getattr(r, "source_file", "") else "Unknown"
+                source_sheet = getattr(r, "source_sheet", "") or "Unknown"
+                body_lines.append(
+                    f"  - [{source_sheet}] {r.test_scenario} "
+                    f"(workbook: {source_file}; owner: {resolve_owner(owners, r.test_scenario, warn=False)})"
+                )
 
     msg = EmailMessage()
     msg["Subject"] = subject
