@@ -81,25 +81,23 @@
 			stage('Run test sheets') {
 				steps {
 					script {
-						// Same set as the GitHub Actions matrix, run sequentially
-						// here rather than in parallel { } - keeps Jenkins agent
-						// resource usage predictable and the failure output in one
-						// readable console log, at the cost of wall-clock time.
-						// Switch to a `parallel` block if that trade-off stops
-						// being the right one once real test volume grows.
-						def sheets = ['TestSteps', 'ParallelDemo', 'ApiDemo', 'RestfulBookerDemo', 'DummyJsonDemo', 'SchemaContractDemo']
-						// Regression is the deliberate, less-frequent run (nightly cron
-						// or manual choice) - worth a notification either way, so
-						// send_on=always there. Smoke fires on every push and stays
-						// failure_only, or a green build would email the team on every
-						// commit and the alert gets muted within a week. Swap this if
-						// that split isn't actually the one you want.
-						def emailSendOn = (env.SUITE == 'Regression') ? 'always' : 'failure_only'
-						def extraToFlag = params.EXTRA_EMAIL_TO?.trim() ? "--email-extra-to \"${params.EXTRA_EMAIL_TO.trim()}\"" : ''
+						def sheets = [
+							'TestSteps',
+							'ParallelDemo',
+							'ApiDemo',
+							'RestfulBookerDemo',
+							'DummyJsonDemo',
+							'SchemaContractDemo'
+						]
+
+						def extraToFlag = params.EXTRA_EMAIL_TO?.trim()
+							? "--email-extra-to \"${params.EXTRA_EMAIL_TO.trim()}\""
+							: ""
+
 						for (sheet in sheets) {
 							bat """
 								call .venv\\Scripts\\activate.bat
-								python tests\\runner.py --sheet-name ${sheet} --suite ${env.SUITE} --workers 2
+								python tests\\runner.py --sheet-name ${sheet} --suite ${env.SUITE} --workers 2 ${extraToFlag}
 							"""
 						}
 					}
@@ -108,19 +106,19 @@
 
 			stage('Run session demo (ordered)') {
 				steps {
-					// SessionSave then SessionReuse, same reasoning as the
-					// GitHub Actions job of the same name - these can't be in
-					// the sheets list above because order matters between them.
-					def emailSendOn = (env.SUITE == 'Regression') ? 'always' : 'failure_only'
-					def extraToFlag = params.EXTRA_EMAIL_TO?.trim() ? "--email-extra-to \"${params.EXTRA_EMAIL_TO.trim()}\"" : ''						
-					bat """
-						call .venv\\Scripts\\activate.bat
-						python tests\\runner.py --sheet-name SessionSave --suite ${env.SUITE}
-						python tests\\runner.py --sheet-name SessionReuse --suite ${env.SUITE}
-					"""
+					script {
+						def extraToFlag = params.EXTRA_EMAIL_TO?.trim()
+							? "--email-extra-to \"${params.EXTRA_EMAIL_TO.trim()}\""
+							: ""
+
+						bat """
+							call .venv\\Scripts\\activate.bat
+							python tests\\runner.py --sheet-name SessionSave --suite ${env.SUITE} ${extraToFlag}
+							python tests\\runner.py --sheet-name SessionReuse --suite ${env.SUITE} ${extraToFlag}
+						"""
+					}
 				}
 			}
-		}
 
 	post {
 		always {
