@@ -16,112 +16,136 @@
 	// core/session_manager.py's preflight check exists to catch. Wiping the
 	// workspace every build makes Jenkins behave the same as GH Actions here.
 
-	pipeline {
-		agent any
+// Same three triggers as .github/workflows/tests.yml:
+//   push (via webhook)  -> Smoke
+//   cron (nightly)      -> Regression
+//   manual "Build with Parameters" -> your choice, defaults to Smoke
 
-		triggers {
-			githubPush()
-			cron(env.BRANCH_NAME == 'main' ? '0 2 * * *' : '')   // nightly, main branch only
-		}
+pipeline {
+	agent any
 
-		parameters {
-			choice(name: 'SUITE', choices: ['Smoke', 'Regression'], description: 'Used only for a manual build - push/nightly decide this themselves below.')
-			string(name: 'EXTRA_EMAIL_TO', defaultValue: '', description: 'Optional extra recipient(s) for this build\'s run-notification email, comma-separated. Added on top of email.to_addresses in config.yaml for THIS build only - does not change config.yaml.')
-		}
+	triggers {
+		githubPush()
+		cron(env.BRANCH_NAME == 'main' ? '0 2 * * *' : '')
+	}
 
-		options {
-			timestamps()
-			disableConcurrentBuilds()
-		}
-		
-		environment {
-			SMTP_PASSWORD = credentials('smtp-password')
-		}
+	parameters {
+		choice(
+			name: 'SUITE',
+			choices: ['Smoke', 'Regression'],
+			description: 'Used only for a manual build - push/nightly decide this themselves below.'
+		)
 
-		stages {
-			stage('Determine suite') {
-				steps {
-					script {
-						if (currentBuild.getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause')) {
-							env.SUITE = 'Regression'
-						} else if (currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')) {
-							env.SUITE = params.SUITE
-						} else {
-							env.SUITE = 'Smoke'   // push / webhook-triggered
-						}
-						echo "Running Suite=${env.SUITE} (trigger-derived, not just the SUITE parameter)"
+		string(
+			name: 'EXTRA_EMAIL_TO',
+			defaultValue: '',
+			description: 'Optional extra recipient(s) for this build\'s run-notification email, comma-separated.'
+		)
+	}
+
+	options {
+		timestamps()
+		disableConcurrentBuilds()
+	}
+
+	environment {
+		SMTP_PASSWORD = credentials('smtp-password')
+	}
+
+	stages {
+
+		stage('Determine suite') {
+			steps {
+				script {
+					if (currentBuild.getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause')) {
+						env.SUITE = 'Regression'
+					} else if (currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')) {
+						env.SUITE = params.SUITE
+					} else {
+						env.SUITE = 'Smoke'
 					}
+
+					echo "Running Suite=${env.SUITE} (trigger-derived, not just the SUITE parameter)"
 				}
 			}
+		}
 
-			stage('Clean workspace') {
-				steps {
-					cleanWs()
-				}
+		stage('Clean workspace') {
+			steps {
+				cleanWs()
 			}
+		}
 
-			stage('Checkout') {
-				steps {
-					checkout scm
-				}
+		stage('Checkout') {
+			steps {
+				checkout scm
 			}
+		}
 
-			stage('Install dependencies') {
-				steps {
-					bat '''
-						py -m venv .venv
-						call .venv\\Scripts\\activate.bat
-						python -m pip install --upgrade pip
-						pip install -r requirements.txt
-						python -m playwright install chromium
-					'''
-				}
+		stage('Install dependencies') {
+			steps {
+				bat '''
+					py -m venv .venv
+					call .venv\\Scripts\\activate.bat
+					python -m pip install --upgrade pip
+					pip install -r requirements.txt
+					python -m playwright install chromium
+				'''
 			}
+		}
 
-			stage('Run test sheets') {
-				steps {
-					script {
-						def sheets = [
-							'TestSteps',
-							'ParallelDemo',
-							'ApiDemo',
-							'RestfulBookerDemo',
-							'DummyJsonDemo',
-							'SchemaContractDemo'
-						]
+		stage('Run test sheets') {
+			steps {
+				script {
 
-						def extraToFlag = params.EXTRA_EMAIL_TO?.trim()
-							? "--email-extra-to \"${params.EXTRA_EMAIL_TO.trim()}\""
-							: ""
+					def sheets = [
+						'TestSteps',
+						'ParallelDemo',
+						'ApiDemo',
+						'RestfulBookerDemo',
+						'DummyJsonDemo',
+						'SchemaContractDemo'
+					]
 
-						for (sheet in sheets) {
-							bat """
-								call .venv\\Scripts\\activate.bat
-								python tests\\runner.py --sheet-name ${sheet} --suite ${env.SUITE} --workers 2 ${extraToFlag}
-							"""
-						}
-					}
-				}
-			}
+					def extraToFlag = params.EXTRA_EMAIL_TO?.trim()
+						? "--email-extra-to \"${params.EXTRA_EMAIL_TO.trim()}\""
+						: ""
 
-			stage('Run session demo (ordered)') {
-				steps {
-					script {
-						def extraToFlag = params.EXTRA_EMAIL_TO?.trim()
-							? "--email-extra-to \"${params.EXTRA_EMAIL_TO.trim()}\""
-							: ""
+					for (sheet in sheets) {
 
 						bat """
 							call .venv\\Scripts\\activate.bat
-							python tests\\runner.py --sheet-name SessionSave --suite ${env.SUITE} ${extraToFlag}
-							python tests\\runner.py --sheet-name SessionReuse --suite ${env.SUITE} ${extraToFlag}
+							python tests\\runner.py --sheet-name ${sheet} --suite ${env.SUITE} --workers 2 ${extraToFlag}
 						"""
 					}
 				}
 			}
+		}
+
+		stage('Run session demo (ordered)') {
+			steps {
+				script {
+
+					def extraToFlag = params.EXTRA_EMAIL_TO?.trim()
+						? "--email-extra-to \"${params.EXTRA_EMAIL_TO.trim()}\""
+						: ""
+
+					bat """
+						call .venv\\Scripts\\activate.bat
+
+						python tests\\runner.py --sheet-name SessionSave --suite ${env.SUITE} ${extraToFlag}
+
+						python tests\\runner.py --sheet-name SessionReuse --suite ${env.SUITE} ${extraToFlag}
+					"""
+				}
+			}
+		}
+	}
 
 	post {
+
 		always {
+
 			archiveArtifacts(
 				artifacts: 'reports/**, logs/**',
 				allowEmptyArchive: true,
@@ -147,5 +171,4 @@
 			])
 		}
 	}
-	}
-		}
+}
