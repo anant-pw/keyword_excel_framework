@@ -8,12 +8,13 @@ Logs), swapped client-side with plain JS - no server, still one portable
 HTML file. Screenshots and full log file contents are embedded as
 base64/text directly into the document for the same reason.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 import base64
 import html
 import json
+import os
 import re
 
 from core.owners_loader import resolve_owner
@@ -246,6 +247,86 @@ class CaseResult:
     status: str = "PASS"  # PASS | FAIL
     step_results: list = field(default_factory=list)
     duration_ms: int = 0
+    source_file: str = ""
+    source_sheet: str = ""
+
+
+def _ci_run_id() -> str:
+    return os.environ.get("BUILD_TAG", "").strip()
+
+
+def _aggregate_results_path(report_dir: Path) -> Path:
+    return report_dir / ".jenkins_report_results.json"
+
+
+def _aggregate_logs_path(report_dir: Path) -> Path:
+    return report_dir / ".jenkins_report_logs.json"
+
+
+def _step_from_dict(data: dict) -> StepResult:
+    return StepResult(
+        row_id=data.get("row_id", 0),
+        description=data.get("description", ""),
+        keyword=data.get("keyword", ""),
+        locator_value=data.get("locator_value", ""),
+        test_data=data.get("test_data", ""),
+        status=data.get("status", "PASS"),
+        message=data.get("message", ""),
+        screenshot_path=data.get("screenshot_path", ""),
+        duration_ms=data.get("duration_ms", 0),
+        children=[_step_from_dict(child) for child in data.get("children", [])],
+        saved=data.get("saved", ""),
+        scenario=data.get("scenario", ""),
+    )
+
+
+def _load_aggregate_results(report_dir: Path) -> list:
+    path = _aggregate_results_path(report_dir)
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, TypeError):
+        return []
+    return [
+        CaseResult(
+            test_scenario=item.get("test_scenario", ""),
+            status=item.get("status", "PASS"),
+            step_results=[_step_from_dict(step) for step in item.get("step_results", [])],
+            duration_ms=item.get("duration_ms", 0),
+            source_file=item.get("source_file", ""),
+            source_sheet=item.get("source_sheet", ""),
+        )
+        for item in data
+    ]
+
+
+def _save_aggregate_results(report_dir: Path, results: list) -> None:
+    _aggregate_results_path(report_dir).write_text(
+        json.dumps([asdict(result) for result in results], indent=2),
+        encoding="utf-8",
+    )
+
+
+def _load_aggregate_logs(report_dir: Path) -> list:
+    path = _aggregate_logs_path(report_dir)
+    if not path.exists():
+        return []
+    try:
+        return [str(item) for item in json.loads(path.read_text(encoding="utf-8"))]
+    except (json.JSONDecodeError, OSError, TypeError):
+        return []
+
+
+def _save_aggregate_logs(report_dir: Path, log_paths: list) -> None:
+    unique = []
+    seen = set()
+    for path in log_paths:
+        normalized = str(Path(path))
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            unique.append(normalized)
+    _aggregate_logs_path(report_dir).write_text(json.dumps(unique, indent=2), encoding="utf-8")
 
 
 def _append_history(report_dir: Path, run_started: datetime, suite: str, total: int, passed: int, failed: int, limit: int) -> list:
@@ -255,12 +336,31 @@ def _append_history(report_dir: Path, run_started: datetime, suite: str, total: 
     if history_path.exists():
         try:
             history = json.loads(history_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, OSError):
             history = []
-    history.append({
+
+    run_id = _ci_run_id()
+    entry = {
         "timestamp": run_started.strftime("%Y-%m-%d %H:%M:%S"),
-        "suite": suite, "total": total, "passed": passed, "failed": failed,
-    })
+        "suite": suite,
+        "total": total,
+        "passed": passed,
+        "failed": failed,
+        "run_id": run_id,
+    }
+
+    if run_id:
+        replaced = False
+        for index, existing in enumerate(history):
+            if existing.get("run_id") == run_id:
+                history[index] = entry
+                replaced = True
+                break
+        if not replaced:
+            history.append(entry)
+    else:
+        history.append(entry)
+
     history = history[-limit:]
     history_path.write_text(json.dumps(history, indent=2), encoding="utf-8")
     return history
@@ -405,25 +505,31 @@ def _render_log_file(path_str: str) -> str:
 def generate_html_report(results: list, report_dir: str, run_started: datetime, suite: str,
                           history_limit: int = 10, log_paths: list = None,
                           executed_by: str = "", owners: dict = None) -> Path:
-    """log_paths: every log file belonging to this run - the main
-    process's own file, plus one per worker process when --workers > 1
-    (each worker writes its own file - see core/logger.py's per-PID
-    naming - so a parallel run's step-by-step detail lives across several
-    files, not one). tests/runner.py::main() collects these and passes
-    them through; defaults to none for callers/tests that don't care
-    about the Logs page.
-
-    executed_by/owners are optional (see core/notifier.py resp.
-    core/owners_loader.py) - a caller that doesn't pass them just gets a
-    report with no "Executed by" line and no owner tags, same as before
-    this feature existed."""
+    """Generate the custom report; under Jenkins, aggregate every sheet run."""
     log_paths = log_paths or []
     owners = owners or {}
-    total = len(results)
-    passed = sum(1 for r in results if r.status == "PASS")
+    out_dir = Path(report_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if _ci_run_id():
+        all_results = _load_aggregate_results(out_dir)
+        all_results.extend(results)
+        _save_aggregate_results(out_dir, all_results)
+
+        all_logs = _load_aggregate_logs(out_dir)
+        all_logs.extend(log_paths)
+        _save_aggregate_logs(out_dir, all_logs)
+
+        report_results = all_results
+        report_log_paths = _load_aggregate_logs(out_dir)
+    else:
+        report_results = results
+        report_log_paths = log_paths
+
+    total = len(report_results)
+    passed = sum(1 for r in report_results if r.status == "PASS")
     failed = total - passed
 
-    out_dir = Path(report_dir)
     history = _append_history(out_dir, run_started, suite, total, passed, failed, history_limit)
 
     history_rows = "".join(
@@ -432,15 +538,27 @@ def generate_html_report(results: list, report_dir: str, run_started: datetime, 
         for h in reversed(history)
     )
 
+    workbook_names = sorted({Path(r.source_file).name if r.source_file else "Unknown" for r in report_results})
+    workbook_text = ", ".join(workbook_names)
+
     rows_html = []
-    for r in results:
+    for r in report_results:
         step_rows = "".join(_render_step_row(s) for s in r.step_results)
         owner = resolve_owner(owners, r.test_scenario, warn=False)
-        owner_html = f"<span class='owner-tag'>{html.escape(owner)}</span>"
+        owner_html = f"<span class='owner-tag'>{html.escape(owner)}</span>" if owner else ""
+        source_file = Path(r.source_file).name if r.source_file else "Unknown"
+        source_sheet = r.source_sheet or "Unknown"
+        source_html = (
+            f"<div class='case-source'><strong>Workbook:</strong> {html.escape(source_file)}"
+            f"&nbsp;&nbsp;|&nbsp;&nbsp;<strong>Sheet:</strong> {html.escape(source_sheet)}</div>"
+        )
         rows_html.append(f"""
         <div class="case">
           <div class="case-header {r.status}">
-            <div><strong>{html.escape(r.test_scenario)}</strong>{owner_html}</div>
+            <div>
+              <div><strong>{html.escape(r.test_scenario)}</strong>{owner_html}</div>
+              {source_html}
+            </div>
             <span class="badge {r.status}">{r.status}</span>
           </div>
           <table class="steps">
@@ -450,8 +568,8 @@ def generate_html_report(results: list, report_dir: str, run_started: datetime, 
         </div>""")
 
     history_json = json.dumps(history)
-    logs_html = "".join(_render_log_file(p) for p in log_paths) or "<p>No log files recorded for this run.</p>"
-    failure_summary_html = _render_failure_summary(results)
+    logs_html = "".join(_render_log_file(p) for p in report_log_paths) or "<p>No log files recorded for this run.</p>"
+    failure_summary_html = _render_failure_summary(report_results)
     log_levels = ["ERROR", "WARNING", "INFO", "DEBUG", "OTHER"]
     level_checkboxes = "".join(
         f"<label><input type='checkbox' class='log-level-box' value='{lvl}' checked> {lvl}</label>"
@@ -459,7 +577,9 @@ def generate_html_report(results: list, report_dir: str, run_started: datetime, 
     )
 
     html_doc = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Automation Execution Report - {html.escape(suite)}</title><style>{_CSS}</style></head>
+<html><head><meta charset="utf-8"><title>Automation Execution Report - {html.escape(suite)}</title><style>{_CSS}
+.case-source {{ font-size:11px; color:#666; margin-top:5px; }}
+</style></head>
 <body>
 <div class="layout">
   <nav class="sidebar" id="sidebar">
@@ -472,7 +592,7 @@ def generate_html_report(results: list, report_dir: str, run_started: datetime, 
 
   <main class="content">
     <h1>Keyword Framework - Execution Report</h1>
-    <div class="meta">Run started: {run_started.strftime('%Y-%m-%d %H:%M:%S')} | Suite: {html.escape(suite)} | Executed by: {html.escape(executed_by) if executed_by else 'unknown'}</div>
+    <div class="meta">Run started: {run_started.strftime('%Y-%m-%d %H:%M:%S')} | Suite: {html.escape(suite)} | Executed by: {html.escape(executed_by) if executed_by else 'unknown'}<br>Workbook(s): {html.escape(workbook_text)}</div>
 
     <div class="page active" id="page-results">
       <div class="summary">
@@ -497,9 +617,9 @@ def generate_html_report(results: list, report_dir: str, run_started: datetime, 
     </div>
 
     <div class="page" id="page-logs">
-      <h2>Logs ({len(log_paths)} file{'s' if len(log_paths) != 1 else ''} - one per process; --workers &gt; 1 means one per worker)</h2>
+      <h2>Logs ({len(report_log_paths)} file{'s' if len(report_log_paths) != 1 else ''} - one per process; --workers &gt; 1 means one per worker)</h2>
       <div class="log-controls">
-        <input type="text" id="logSearch" placeholder="Search log text, e.g. a Row number or keyword..."/>
+        <input type="text" id="logSearch" placeholder="Search log text, e.g. Row number, keyword, scenario, or sheet..."/>
         {level_checkboxes}
       </div>
       {logs_html}
@@ -511,6 +631,6 @@ def generate_html_report(results: list, report_dir: str, run_started: datetime, 
 <script>{_JS}</script>
 </body></html>"""
 
-    out_path = out_dir / f"report_{run_started.strftime('%Y%m%d_%H%M%S')}.html"
+    out_path = out_dir / "execution_report.html" if _ci_run_id() else out_dir / f"report_{run_started.strftime('%Y%m%d_%H%M%S')}.html"
     out_path.write_text(html_doc, encoding="utf-8")
     return out_path

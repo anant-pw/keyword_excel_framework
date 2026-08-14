@@ -199,7 +199,11 @@ def _append_skipped(results: list, remaining_steps) -> None:
 
 
 def run_test_case(page, test_case, config, fail_fast: bool) -> CaseResult:
-    result = CaseResult(test_scenario=test_case.test_scenario)
+    result = CaseResult(
+        test_scenario=test_case.test_scenario,
+        source_file=config.test_sheet_file,
+        source_sheet=config.sheet_name,
+    )
     case_properties = CasePropertyStore(config.properties_dir, config.env_variables)
     api_context = ApiCallContext()
     case_start = time.time()
