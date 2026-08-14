@@ -296,6 +296,14 @@ def main():
                               "independent demo sheets (e.g. TestSteps, ParallelDemo, SessionDemo)")
     parser.add_argument("--workers", type=int, default=None,
                          help="Override workers from config.yaml (>1 runs cases across parallel processes)")
+    parser.add_argument("--email-send-on", choices=["always", "failure_only"], default=None,
+                         help="Override email.send_on from config.yaml for this invocation - lets CI send "
+                              "'always' for some suites/jobs (e.g. nightly Regression) while others stay "
+                              "failure_only, without needing two separate config.yaml files.")
+    parser.add_argument("--email-extra-to", default=None,
+                         help="Comma-separated extra recipient(s), added on top of email.to_addresses from "
+                              "config.yaml for this run only - e.g. a Jenkins build parameter someone fills "
+                              "in for a one-off run, without editing config.yaml.")
     args = parser.parse_args()
 
     config = load_config()
@@ -309,6 +317,11 @@ def main():
         config.sheet_name = args.sheet_name
     if args.workers:
         config.workers = args.workers
+    if args.email_send_on:
+        config.email_send_on = args.email_send_on
+    if args.email_extra_to:
+        extra = [addr.strip() for addr in args.email_extra_to.split(",") if addr.strip()]
+        config.email_to = list(config.email_to) + extra
 
     fail_fast = config.suite.lower() in FAIL_FAST_SUITES
     run_started = datetime.now()

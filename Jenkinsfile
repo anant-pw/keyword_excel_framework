@@ -26,6 +26,7 @@
 
 		parameters {
 			choice(name: 'SUITE', choices: ['Smoke', 'Regression'], description: 'Used only for a manual build - push/nightly decide this themselves below.')
+			string(name: 'EXTRA_EMAIL_TO', defaultValue: '', description: 'Optional extra recipient(s) for this build\'s run-notification email, comma-separated. Added on top of email.to_addresses in config.yaml for THIS build only - does not change config.yaml.')
 		}
 
 		options {
@@ -87,6 +88,14 @@
 						// Switch to a `parallel` block if that trade-off stops
 						// being the right one once real test volume grows.
 						def sheets = ['TestSteps', 'ParallelDemo', 'ApiDemo', 'RestfulBookerDemo', 'DummyJsonDemo', 'SchemaContractDemo']
+						// Regression is the deliberate, less-frequent run (nightly cron
+						// or manual choice) - worth a notification either way, so
+						// send_on=always there. Smoke fires on every push and stays
+						// failure_only, or a green build would email the team on every
+						// commit and the alert gets muted within a week. Swap this if
+						// that split isn't actually the one you want.
+						def emailSendOn = (env.SUITE == 'Regression') ? 'always' : 'failure_only'
+						def extraToFlag = params.EXTRA_EMAIL_TO?.trim() ? "--email-extra-to \"${params.EXTRA_EMAIL_TO.trim()}\"" : ''
 						for (sheet in sheets) {
 							bat """
 								call .venv\\Scripts\\activate.bat
@@ -102,6 +111,8 @@
 					// SessionSave then SessionReuse, same reasoning as the
 					// GitHub Actions job of the same name - these can't be in
 					// the sheets list above because order matters between them.
+					def emailSendOn = (env.SUITE == 'Regression') ? 'always' : 'failure_only'
+					def extraToFlag = params.EXTRA_EMAIL_TO?.trim() ? "--email-extra-to \"${params.EXTRA_EMAIL_TO.trim()}\"" : ''						
 					bat """
 						call .venv\\Scripts\\activate.bat
 						python tests\\runner.py --sheet-name SessionSave --suite ${env.SUITE}
