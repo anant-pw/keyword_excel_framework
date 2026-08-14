@@ -290,6 +290,16 @@ def main():
     parser.add_argument("--suite", choices=["Smoke", "Sanity", "Regression"], default=None,
                          help="Override suite from config.yaml")
     parser.add_argument("--headed", action="store_true", help="Run with a visible browser")
+    parser.add_argument("--browser", choices=["chromium", "firefox", "webkit"], default=None,
+                         help="Override browser from config.yaml")
+    parser.add_argument("--base-url", default=None, help="Override base_url from config.yaml - e.g. point a "
+                                                           "run at staging vs. prod without editing config.yaml")
+    parser.add_argument("--no-screenshot", action="store_true",
+                         help="Disable failure screenshots for this run (screenshot_on_failure=False) - "
+                              "trades report detail for a faster/lighter run")
+    parser.add_argument("--slow-mo", type=int, default=None,
+                         help="Override slow_mo_ms from config.yaml - milliseconds of delay Playwright adds "
+                              "between actions, useful for a --headed run someone is watching live")
     parser.add_argument("--sheet-file", default=None, help="Override test_sheet_file from config.yaml")
     parser.add_argument("--sheet-name", default=None,
                          help="Override sheet_name from config.yaml - lets one workbook hold several "
@@ -311,6 +321,14 @@ def main():
         config.suite = args.suite
     if args.headed:
         config.headless = False
+    if args.browser:
+        config.browser = args.browser
+    if args.base_url:
+        config.base_url = args.base_url
+    if args.no_screenshot:
+        config.screenshot_on_failure = False
+    if args.slow_mo:
+        config.slow_mo_ms = args.slow_mo
     if args.sheet_file:
         config.test_sheet_file = args.sheet_file
     if args.sheet_name:
