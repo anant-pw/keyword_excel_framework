@@ -127,10 +127,6 @@ pipeline {
                     flags << "--workers ${params.WORKERS?.trim() ?: '2'}"
                     flags << "--browser ${params.BROWSER}"
 
-                    if (params.SHEET_FILE?.trim()) {
-                        flags << "--sheet-file \"${params.SHEET_FILE.trim()}\""
-                    }
-
                     if (params.HEADED) {
                         flags << "--headed"
                     }
@@ -247,8 +243,7 @@ pipeline {
 						workbookPath = bat(
 							returnStdout: true,
 							script: '''
-								call .venv\\Scripts\\activate.bat
-								python -c "import yaml; c=yaml.safe_load(open('config/config.yaml', encoding='utf-8')) or {}; print(c.get('test_sheet_file','').strip())"
+								.venv\\Scripts\\python.exe -c "import yaml; c=yaml.safe_load(open('config/config.yaml', encoding='utf-8')) or {}; print(c.get('test_sheet_file','').strip())"
 							'''
 						).trim()
 
@@ -303,8 +298,7 @@ pipeline {
 					def discoveredSheets = bat(
 						returnStdout: true,
 						script: """
-							call .venv\\\\Scripts\\\\activate.bat
-							python -c "import openpyxl; wb=openpyxl.load_workbook(r'${env.ACTIVE_SHEET_FILE}', read_only=True); print('|'.join(wb.sheetnames)); wb.close()"
+							.venv\\\\Scripts\\\\python.exe -c "import openpyxl; wb=openpyxl.load_workbook(r'${env.ACTIVE_SHEET_FILE}', read_only=True); print('|'.join(wb.sheetnames)); wb.close()"
 						"""
 					).trim()
 
@@ -367,8 +361,11 @@ pipeline {
                         echo "Running Excel sheet: ${sheet}"
 
                         bat """
-                            call .venv\\Scripts\\activate.bat
-                            python tests\\runner.py --sheet-name "${sheet}" --suite ${env.SUITE} ${env.RUN_FLAGS}
+							.venv\\Scripts\\python.exe tests\\runner.py ^
+								--sheet-file "${env.ACTIVE_SHEET_FILE}" ^
+								--sheet-name "${sheet}" ^
+								--suite ${env.SUITE} ^
+								${env.RUN_FLAGS}
                         """
                     }
                 }
@@ -384,11 +381,19 @@ pipeline {
             }
 
             steps {
-                bat """
-                    call .venv\\Scripts\\activate.bat
-                    python tests\\runner.py --sheet-name SessionSave --suite ${env.SUITE} ${env.RUN_FLAGS}
-                    python tests\\runner.py --sheet-name SessionReuse --suite ${env.SUITE} ${env.RUN_FLAGS}
-                """
+				bat """
+					.venv\\Scripts\\python.exe tests\\runner.py ^
+						--sheet-file "${env.ACTIVE_SHEET_FILE}" ^
+						--sheet-name SessionSave ^
+						--suite ${env.SUITE} ^
+						${env.RUN_FLAGS}
+
+					.venv\\Scripts\\python.exe tests\\runner.py ^
+						--sheet-file "${env.ACTIVE_SHEET_FILE}" ^
+						--sheet-name SessionReuse ^
+						--suite ${env.SUITE} ^
+						${env.RUN_FLAGS}
+				"""
             }
         }
     }
