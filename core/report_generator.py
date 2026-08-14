@@ -114,6 +114,29 @@ pre.step-log { margin:0 12px 8px; padding:10px 12px; background:#1f2430; color:#
 .log-truncated { font-size:11px; color:#a33; padding:4px 16px; font-style:italic; }
 .view-logs-link { font-size:11px; color:#2f5496; text-decoration:none; margin-left:8px; white-space:nowrap; }
 .view-logs-link:hover { text-decoration:underline; }
+.sheet-nav { margin-top:8px; border-top:1px solid #343b4b; padding-top:8px; }
+.sheet-nav-title { padding:8px 18px 6px; font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:#8b93a8; font-weight:700; }
+.sheet-nav-item { padding:8px 12px 8px 18px; cursor:pointer; font-size:12px; white-space:nowrap; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.sheet-nav-item:hover { background:#2a3040; color:#fff; }
+.sheet-nav-item.active { background:#2f5496; color:#fff; }
+.sheet-nav-left { display:flex; align-items:center; gap:7px; min-width:0; }
+.sheet-nav-name { overflow:hidden; text-overflow:ellipsis; }
+.sheet-nav-count { font-size:10px; color:#cfd4e0; flex-shrink:0; }
+.sheet-nav-fail { color:#ff9d9d; font-weight:700; }
+.sheet-group { background:#fff; border-radius:8px; margin-bottom:18px; box-shadow:0 1px 3px rgba(0,0,0,.08); overflow:hidden; }
+.sheet-group-header { padding:12px 18px; display:flex; justify-content:space-between; align-items:center; background:#fafbfc; border-bottom:1px solid #eee; cursor:pointer; }
+.sheet-group-header.fail { border-left:5px solid #d13c3c; }
+.sheet-group-header.pass { border-left:5px solid #1a9c5c; }
+.sheet-group-title { font-size:14px; font-weight:700; }
+.sheet-group-meta { font-size:11px; color:#666; margin-top:3px; }
+.sheet-group-body { padding:14px; }
+.sheet-group.collapsed .sheet-group-body { display:none; }
+.sheet-toggle { font-size:12px; color:#666; }
+.case.fail-priority { box-shadow:0 1px 3px rgba(209,60,60,.18); }
+.case-header.FAIL { background:#fff7f7; }
+.fail-banner { background:#fff1f1; border:1px solid #f0cccc; color:#a33; padding:10px 14px; border-radius:6px; margin-bottom:12px; font-size:12px; }
+.sheet-filter-note { font-size:12px; color:#666; margin:-6px 0 14px; }
+
 
 /* ---- failure summary (Results page) ---- */
 .failure-summary { background:#fff; border-radius:8px; padding:14px 20px; margin-bottom:20px; box-shadow:0 1px 3px rgba(0,0,0,.08); border-left:5px solid #d13c3c; }
@@ -144,6 +167,41 @@ document.getElementById('sidebarToggle').addEventListener('click', () => {
 });
 document.querySelectorAll('.case-header').forEach(h => {
   h.addEventListener('click', () => h.parentElement.classList.toggle('open'));
+});
+
+// ---- Excel sheet navigation ----
+const sheetItems = document.querySelectorAll('.sheet-nav-item');
+const sheetGroups = document.querySelectorAll('.sheet-group');
+const sheetFilterNote = document.getElementById('sheetFilterNote');
+sheetItems.forEach(item => {
+  item.addEventListener('click', () => {
+    const filter = item.dataset.sheetFilter;
+    sheetItems.forEach(i => i.classList.remove('active'));
+    item.classList.add('active');
+    sheetGroups.forEach(group => {
+      group.style.display = (filter === '__ALL__' || group.dataset.sheet === filter) ? '' : 'none';
+    });
+    if (sheetFilterNote) {
+      sheetFilterNote.textContent = filter === '__ALL__'
+        ? 'Showing all sheets. Failed sheets and failed cases are shown first.'
+        : 'Showing sheet: ' + filter + '. Failed cases are shown first.';
+    }
+    document.querySelector('.nav-item[data-page="results"]').click();
+  });
+});
+
+document.querySelectorAll('.sheet-group-header').forEach(header => {
+  header.addEventListener('click', () => {
+    const group = header.parentElement;
+    group.classList.toggle('collapsed');
+    const toggle = header.querySelector('.sheet-toggle');
+    if (toggle) toggle.innerHTML = group.classList.contains('collapsed') ? '&#9654;' : '&#9660;';
+  });
+});
+
+document.querySelectorAll('.sheet-group').forEach(group => {
+  const header = group.querySelector('.sheet-group-header');
+  if (!header.classList.contains('fail')) group.classList.add('collapsed');
 });
 document.querySelectorAll('tr.composite-row, tr.log-row').forEach(row => {
   row.addEventListener('click', (e) => {
@@ -541,8 +599,13 @@ def generate_html_report(results: list, report_dir: str, run_started: datetime, 
     workbook_names = sorted({Path(r.source_file).name if r.source_file else "Unknown" for r in report_results})
     workbook_text = ", ".join(workbook_names)
 
-    rows_html = []
+    # Group results by Excel sheet; failed sheets/cases appear first.
+    sheet_groups = {}
     for r in report_results:
+        sheet_name = r.source_sheet or "Unknown"
+        sheet_groups.setdefault(sheet_name, []).append(r)
+
+    def _case_html(r):
         step_rows = "".join(_render_step_row(s) for s in r.step_results)
         owner = resolve_owner(owners, r.test_scenario, warn=False)
         owner_html = f"<span class='owner-tag'>{html.escape(owner)}</span>" if owner else ""
@@ -552,20 +615,71 @@ def generate_html_report(results: list, report_dir: str, run_started: datetime, 
             f"<div class='case-source'><strong>Workbook:</strong> {html.escape(source_file)}"
             f"&nbsp;&nbsp;|&nbsp;&nbsp;<strong>Sheet:</strong> {html.escape(source_sheet)}</div>"
         )
-        rows_html.append(f"""
-        <div class="case">
-          <div class="case-header {r.status}">
+        priority = " fail-priority" if r.status == "FAIL" else ""
+        return """        <div class="case%s">
+          <div class="case-header %s">
             <div>
-              <div><strong>{html.escape(r.test_scenario)}</strong>{owner_html}</div>
-              {source_html}
+              <div><strong>%s</strong>%s</div>
+              %s
             </div>
-            <span class="badge {r.status}">{r.status}</span>
+            <span class="badge %s">%s</span>
           </div>
           <table class="steps">
             <tr><th>Row</th><th>Description</th><th>Keyword</th><th>Locator</th><th>Data</th><th>Result</th></tr>
-            {step_rows}
+            %s
           </table>
-        </div>""")
+        </div>""" % (
+            priority, r.status, html.escape(r.test_scenario), owner_html,
+            source_html, r.status, r.status, step_rows
+        )
+
+    def group_key(item):
+        sheet, cases = item
+        failed_cases = sum(1 for c in cases if c.status == "FAIL")
+        return (0 if failed_cases else 1, -failed_cases, sheet.lower())
+
+    ordered_groups = sorted(sheet_groups.items(), key=group_key)
+    group_html = []
+    sidebar_html = []
+
+    sidebar_html.append(
+        f"<div class='sheet-nav-item active' data-sheet-filter='__ALL__'>"
+        f"<span class='sheet-nav-left'><span>All Sheets</span></span>"
+        f"<span class='sheet-nav-count{' sheet-nav-fail' if failed else ''}'>{len(report_results)}"
+        f"{(' / ' + str(failed) + ' fail') if failed else ''}</span></div>"
+    )
+
+    for index, (sheet_name, cases) in enumerate(ordered_groups):
+        failed_cases = sum(1 for c in cases if c.status == "FAIL")
+        passed_cases = sum(1 for c in cases if c.status == "PASS")
+        ordered_cases = sorted(cases, key=lambda c: (c.status != "FAIL", c.test_scenario.lower()))
+        group_class = "fail" if failed_cases else "pass"
+        fail_banner = "<div class='fail-banner'>Failed test cases are shown first in this sheet.</div>" if failed_cases else ""
+        case_html = "".join(_case_html(c) for c in ordered_cases)
+        group_html.append(
+            f"""<section class="sheet-group" data-sheet="{html.escape(sheet_name, quote=True)}" id="sheet-{index}">
+              <div class="sheet-group-header {group_class}">
+                <div>
+                  <div class="sheet-group-title">{html.escape(sheet_name)}</div>
+                  <div class="sheet-group-meta">{len(cases)} test case(s) &nbsp;|&nbsp; {passed_cases} passed &nbsp;|&nbsp; {failed_cases} failed</div>
+                </div>
+                <span class="sheet-toggle">{'&#9660;' if failed_cases else '&#9654;'}</span>
+              </div>
+              <div class="sheet-group-body">
+                {fail_banner}
+                {case_html}
+              </div>
+            </section>"""
+        )
+        sidebar_html.append(
+            f"<div class='sheet-nav-item' data-sheet-filter='{html.escape(sheet_name, quote=True)}'>"
+            f"<span class='sheet-nav-left'><span class='sheet-nav-name'>{html.escape(sheet_name)}</span></span>"
+            f"<span class='sheet-nav-count{' sheet-nav-fail' if failed_cases else ''}'>{len(cases)}"
+            f"{(' / ' + str(failed_cases) + ' fail') if failed_cases else ''}</span></div>"
+        )
+
+    grouped_results_html = "".join(group_html)
+    sheet_sidebar_html = "".join(sidebar_html)
 
     history_json = json.dumps(history)
     logs_html = "".join(_render_log_file(p) for p in report_log_paths) or "<p>No log files recorded for this run.</p>"
@@ -586,6 +700,10 @@ def generate_html_report(results: list, report_dir: str, run_started: datetime, 
     <div class="sidebar-toggle" id="sidebarToggle">&#9776;</div>
     <div class="sidebar-brand">Execution Report</div>
     <div class="nav-item active" data-page="results"><span class="nav-icon">&#9635;</span><span class="nav-label">Results</span></div>
+    <div class="sheet-nav">
+      <div class="sheet-nav-title">Excel Sheets</div>
+      {sheet_sidebar_html}
+    </div>
     <div class="nav-item" data-page="history"><span class="nav-icon">&#8635;</span><span class="nav-label">Run history</span></div>
     <div class="nav-item" data-page="logs"><span class="nav-icon">&#9776;</span><span class="nav-label">Logs</span></div>
   </nav>
@@ -600,9 +718,10 @@ def generate_html_report(results: list, report_dir: str, run_started: datetime, 
         <div class="card pass"><div class="num">{passed}</div>Passed</div>
         <div class="card fail"><div class="num">{failed}</div>Failed</div>
       </div>
-      <h2>Test cases (grouped by Test Scenario)</h2>
+      <h2>Test cases by Excel sheet</h2>
+      <div class="sheet-filter-note" id="sheetFilterNote">Showing all sheets. Failed sheets and failed cases are shown first.</div>
       {failure_summary_html}
-      {"".join(rows_html)}
+      {grouped_results_html}
     </div>
 
     <div class="page" id="page-history">
