@@ -26,7 +26,7 @@
 
 		parameters {
 			choice(name: 'SUITE', choices: ['Smoke', 'Regression'], description: 'Used only for a manual build - push/nightly decide this themselves below.')
-			choice(name: 'SHEET_NAME', choices: ['ALL', 'TestSteps', 'ParallelDemo', 'ApiDemo', 'RestfulBookerDemo', 'DummyJsonDemo', 'SchemaContractDemo', 'SessionDemo'], description: 'ALL (default) runs the full matrix, same as before this parameter existed - what push/nightly get automatically since they never fill this form in. Pick one sheet to run just that for a faster manual/debug build. SessionDemo runs the SessionSave->SessionReuse ordered pair on its own.')
+			string(name: 'SHEET_NAME', defaultValue: 'ALL', description: 'ALL (default) runs the full matrix from testsheets/TestSuite.xlsx - what push/nightly get automatically since they never fill this form in. Type an exact sheet/tab name (e.g. TestSteps, ApiDemo) to run just that one, or SessionDemo to run the SessionSave->SessionReuse ordered pair. If you set SHEET_FILE below to a different workbook, ALL is not valid there - type the real sheet name(s) from that file instead (the build will fail fast with a clear message if you leave this as ALL alongside a custom SHEET_FILE).')
 			string(name: 'SHEET_FILE', defaultValue: '', description: 'Optional - path to an alternate workbook (overrides test_sheet_file from config.yaml). Leave blank to use testsheets/TestSuite.xlsx.')
 			string(name: 'WORKERS', defaultValue: '2', description: 'Parallel worker processes per sheet run.')
 			choice(name: 'BROWSER', choices: ['chromium', 'firefox', 'webkit'], description: 'Browser engine for this run.')
@@ -63,6 +63,24 @@
 							env.SUITE = 'Smoke'   // push / webhook-triggered
 						}
 						echo "Running Suite=${env.SUITE} (trigger-derived, not just the SUITE parameter)"
+					}
+				}
+			}
+
+			stage('Validate sheet parameters') {
+				steps {
+					script {
+						// ALL means "loop over the six known demo-sheet names",
+						// which are only guaranteed to exist in the default
+						// workbook. A custom SHEET_FILE has no such guarantee -
+						// failing here, before any browser/venv setup, beats
+						// discovering the mismatch three stages later as an
+						// opaque openpyxl error from inside core/excel_reader.py.
+						if (params.SHEET_FILE?.trim() && params.SHEET_NAME == 'ALL') {
+							error("SHEET_NAME=ALL only applies to the default demo workbook. " +
+								  "You set SHEET_FILE='${params.SHEET_FILE.trim()}' - re-run with an " +
+								  "explicit SHEET_NAME matching an actual tab in that file.")
+						}
 					}
 				}
 			}
