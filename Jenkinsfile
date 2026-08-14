@@ -190,111 +190,158 @@ pipeline {
             }
         }
 
-        stage('Resolve Excel workbook') {
-            steps {
-                script {
-                    /*
-                     * Determine the workbook that will actually be used.
-                     *
-                     * If SHEET_FILE is supplied, use it.
-                     * Otherwise read test_sheet_file from config.yaml.
-                     */
-                    def workbookPath = params.SHEET_FILE?.trim()
+		stage('Resolve Excel workbook') {
+			steps {
+				script {
+					/*
+					 * Determine the workbook that will actually be used.
+					 *
+					 * SHEET_FILE may be:
+					 *   TestSuite_Pass
+					 *   TestSuite_Pass.xlsx
+					 *   testsheets\TestSuite_Pass.xlsx
+					 *   testsheets/TestSuite_Pass.xlsx
+					 *
+					 * Jenkins resolves the supplied value to the actual workbook.
+					 *
+					 * If SHEET_FILE is blank, test_sheet_file is read from config.yaml.
+					 */
+					def suppliedFile = params.SHEET_FILE?.trim()
+					def workbookPath = ''
 
-                    if (!workbookPath) {
-                        workbookPath = bat(
-                            returnStdout: true,
-                            script: '''
-                                call .venv\\Scripts\\activate.bat
-                                python -c "import yaml; print((yaml.safe_load(open('config/config.yaml', encoding='utf-8')) or {}).get('test_sheet_file', 'testsheets/TestSuite.xlsx'))"
-                            '''
-                        ).trim()
-                    }
+					if (suppliedFile) {
 
-                    env.ACTIVE_SHEET_FILE = workbookPath
+						def candidates = []
 
-                    echo "Excel workbook selected: ${env.ACTIVE_SHEET_FILE}"
+						candidates << suppliedFile
 
-                    if (!fileExists(env.ACTIVE_SHEET_FILE)) {
-                        error("Excel workbook not found: ${env.ACTIVE_SHEET_FILE}")
-                    }
-                }
-            }
-        }
+						if (!suppliedFile.toLowerCase().endsWith('.xlsx')) {
+							candidates << "${suppliedFile}.xlsx"
+						}
 
-        stage('Resolve Excel sheets') {
-            steps {
-                script {
+						candidates << "testsheets\\${suppliedFile}"
 
-                    if (params.SHEET_NAME?.trim() == 'SessionDemo') {
-                        echo "SessionDemo selected - SessionSave -> SessionReuse will run sequentially."
-                        env.RUN_SHEETS = ''
-                        return
-                    }
+						if (!suppliedFile.toLowerCase().endsWith('.xlsx')) {
+							candidates << "testsheets\\${suppliedFile}.xlsx"
+						}
 
-                    /*
-                     * If a specific sheet was supplied, don't inspect or assume
-                     * anything about the workbook.
-                     */
-                    if (params.SHEET_NAME?.trim() &&
-                        params.SHEET_NAME.trim() != 'ALL') {
+						candidates << "testsheets/${suppliedFile}"
 
-                        env.RUN_SHEETS = params.SHEET_NAME.trim()
+						if (!suppliedFile.toLowerCase().endsWith('.xlsx')) {
+							candidates << "testsheets/${suppliedFile}.xlsx"
+						}
 
-                        echo "Selected Excel sheet: ${env.RUN_SHEETS}"
-                        return
-                    }
+						workbookPath = candidates.find { fileExists(it) }
 
-                    /*
-                     * SHEET_NAME=ALL:
-                     * Dynamically discover the tabs from the ACTUAL workbook.
-                     *
-                     * There is deliberately no hardcoded TestSuite.xlsx
-                     * sheet list here.
-                     */
-                    def discoveredSheets = bat(
-                        returnStdout: true,
-                        script: """
-                            call .venv\\\\Scripts\\\\activate.bat
-                            python -c "import openpyxl; wb=openpyxl.load_workbook(r'${env.ACTIVE_SHEET_FILE}', read_only=True); print('|'.join(wb.sheetnames)); wb.close()"
-                        """
-                    ).trim()
+						if (!workbookPath) {
+							error("""
+		Excel workbook not found: ${suppliedFile}
 
-                    if (!discoveredSheets) {
-                        error("No worksheets found in Excel workbook: ${env.ACTIVE_SHEET_FILE}")
-                    }
+		Jenkins searched:
+		${candidates.join('\n')}
+		""")
+						}
 
-                    def allSheets = discoveredSheets
-                        .split('\\|')
-                        .collect { it.trim() }
-                        .findAll { it }
+					} else {
 
-                    /*
-                     * SessionSave and SessionReuse must remain ordered.
-                     * Remove them from the normal sheet loop and execute them
-                     * in the dedicated sequential stage below.
-                     */
-                    def sessionSheets = ['SessionSave', 'SessionReuse']
+						workbookPath = bat(
+							returnStdout: true,
+							script: '''
+								call .venv\\Scripts\\activate.bat
+								python -c "import yaml; c=yaml.safe_load(open('config/config.yaml', encoding='utf-8')) or {}; print(c.get('test_sheet_file','').strip())"
+							'''
+						).trim()
 
-                    def normalSheets = allSheets.findAll {
-                        !sessionSheets.contains(it)
-                    }
+						if (!workbookPath) {
+							error("No Excel workbook configured. Supply SHEET_FILE or set test_sheet_file in config/config.yaml.")
+						}
 
-                    env.RUN_SHEETS = normalSheets.join('|')
-                    env.HAS_SESSION_SHEETS =
-                        allSheets.any { sessionSheets.contains(it) }
-                            ? 'true'
-                            : 'false'
+						if (!fileExists(workbookPath)) {
+							error("Excel workbook configured in config.yaml was not found: ${workbookPath}")
+						}
+					}
 
-                    echo "Discovered Excel sheets: ${allSheets.join(', ')}"
-                    echo "Normal sheets: ${normalSheets.join(', ')}"
+					env.ACTIVE_SHEET_FILE = workbookPath
 
-                    if (env.HAS_SESSION_SHEETS == 'true') {
-                        echo "SessionSave/SessionReuse detected. They will run sequentially."
-                    }
-                }
-            }
-        }
+					echo "Excel workbook selected: ${env.ACTIVE_SHEET_FILE}"
+				}
+			}
+		}
+
+		stage('Resolve Excel sheets') {
+			steps {
+				script {
+
+					if (params.SHEET_NAME?.trim() == 'SessionDemo') {
+						echo "SessionDemo selected - SessionSave -> SessionReuse will run sequentially."
+						env.RUN_SHEETS = ''
+						env.HAS_SESSION_SHEETS = 'true'
+						return
+					}
+
+					/*
+					 * A specific sheet means:
+					 * - do NOT discover/assume sheet names
+					 * - simply pass the requested sheet to runner.py
+					 */
+					if (params.SHEET_NAME?.trim() &&
+						params.SHEET_NAME.trim() != 'ALL') {
+
+						env.RUN_SHEETS = params.SHEET_NAME.trim()
+						env.HAS_SESSION_SHEETS = 'false'
+
+						echo "Selected Excel sheet: ${env.RUN_SHEETS}"
+						return
+					}
+
+					/*
+					 * SHEET_NAME=ALL
+					 *
+					 * Read sheet names dynamically from the workbook selected above.
+					 * Nothing is hardcoded to TestSuite.xlsx or to specific normal sheets.
+					 */
+					def discoveredSheets = bat(
+						returnStdout: true,
+						script: """
+							call .venv\\\\Scripts\\\\activate.bat
+							python -c "import openpyxl; wb=openpyxl.load_workbook(r'${env.ACTIVE_SHEET_FILE}', read_only=True); print('|'.join(wb.sheetnames)); wb.close()"
+						"""
+					).trim()
+
+					if (!discoveredSheets) {
+						error("No worksheets found in Excel workbook: ${env.ACTIVE_SHEET_FILE}")
+					}
+
+					def allSheets = discoveredSheets
+						.split('\\|')
+						.collect { it.trim() }
+						.findAll { it }
+
+					/*
+					 * SessionSave -> SessionReuse is special and must remain sequential.
+					 */
+					def sessionSheets = ['SessionSave', 'SessionReuse']
+
+					def normalSheets = allSheets.findAll {
+						!sessionSheets.contains(it)
+					}
+
+					env.RUN_SHEETS = normalSheets.join('|')
+
+					env.HAS_SESSION_SHEETS =
+						allSheets.any { sessionSheets.contains(it) }
+							? 'true'
+							: 'false'
+
+					echo "Discovered Excel sheets: ${allSheets.join(', ')}"
+					echo "Normal sheets: ${normalSheets.join(', ')}"
+
+					if (env.HAS_SESSION_SHEETS == 'true') {
+						echo "SessionSave/SessionReuse detected. They will run sequentially."
+					}
+				}
+			}
+		}
 
         stage('Run test sheets') {
             when {
