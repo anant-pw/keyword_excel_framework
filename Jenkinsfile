@@ -275,9 +275,8 @@ pipeline {
 					}
 
 					/*
-					 * A specific sheet means:
-					 * - do NOT discover/assume sheet names
-					 * - simply pass the requested sheet to runner.py
+					 * Specific sheet requested.
+					 * No sheet discovery is required.
 					 */
 					if (params.SHEET_NAME?.trim() &&
 						params.SHEET_NAME.trim() != 'ALL') {
@@ -290,15 +289,13 @@ pipeline {
 					}
 
 					/*
-					 * SHEET_NAME=ALL
-					 *
-					 * Read sheet names dynamically from the workbook selected above.
-					 * Nothing is hardcoded to TestSuite.xlsx or to specific normal sheets.
+					 * Discover sheets dynamically from the selected workbook.
 					 */
 					def discoveredSheets = bat(
 						returnStdout: true,
 						script: """
-							.venv\\\\Scripts\\\\python.exe -c "import openpyxl; wb=openpyxl.load_workbook(r'${env.ACTIVE_SHEET_FILE}', read_only=True); print('|'.join(wb.sheetnames)); wb.close()"
+							@echo off
+							.venv\\Scripts\\python.exe -c "import openpyxl; wb=openpyxl.load_workbook(r'${env.ACTIVE_SHEET_FILE}', read_only=True); print('|||'.join(wb.sheetnames)); wb.close()"
 						"""
 					).trim()
 
@@ -307,12 +304,12 @@ pipeline {
 					}
 
 					def allSheets = discoveredSheets
-						.split('\\|')
+						.split('\\|\\|\\|')
 						.collect { it.trim() }
 						.findAll { it }
 
 					/*
-					 * SessionSave -> SessionReuse is special and must remain sequential.
+					 * SessionSave -> SessionReuse must remain sequential.
 					 */
 					def sessionSheets = ['SessionSave', 'SessionReuse']
 
