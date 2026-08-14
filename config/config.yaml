@@ -40,12 +40,14 @@ owners_file: config/owners.yaml
 # SMTP_PASSWORD as an OS/CI secret env var instead (same pattern as
 # {{VAR}} secrets in properties/*.properties).
 email:
-  enabled: false
-  smtp_host: ""
+  enabled: true
+  smtp_host: "smtp.gmail.com"
   smtp_port: 587
-  smtp_user: ""
-  from_address: ""
-  to_addresses: []
+  smtp_user: "mblade455@gmail.com"
+  from_address: "mblade455@gmail.com"
+
+  to_addresses:
+    - "anant.jain@impactqa.com"
   send_on: failure_only        # failure_only | always - failure_only avoids alert fatigue on green runs
   attach_report: true          # attach the HTML report file directly (see notifier.py docstring on why
   attach_summary: true         # not just a link) rather than the full HTML/xlsx
