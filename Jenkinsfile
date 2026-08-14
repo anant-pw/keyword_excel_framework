@@ -16,197 +16,362 @@
 	// core/session_manager.py's preflight check exists to catch. Wiping the
 	// workspace every build makes Jenkins behave the same as GH Actions here.
 
-	pipeline {
-		agent any
+pipeline {
+    agent any
 
-		triggers {
-			githubPush()
-			cron(env.BRANCH_NAME == 'main' ? '0 2 * * *' : '')   // nightly, main branch only
-		}
+    triggers {
+        githubPush()
+        cron(env.BRANCH_NAME == 'main' ? '0 2 * * *' : '')
+    }
 
-		parameters {
-			choice(name: 'SUITE', choices: ['Smoke', 'Regression'], description: 'Used only for a manual build - push/nightly decide this themselves below.')
-			string(name: 'SHEET_NAME', defaultValue: 'ALL', description: 'ALL (default) runs the full matrix from testsheets/TestSuite.xlsx - what push/nightly get automatically since they never fill this form in. Type an exact sheet/tab name (e.g. TestSteps, ApiDemo) to run just that one, or SessionDemo to run the SessionSave->SessionReuse ordered pair. If you set SHEET_FILE below to a different workbook, ALL is not valid there - type the real sheet name(s) from that file instead (the build will fail fast with a clear message if you leave this as ALL alongside a custom SHEET_FILE).')
-			string(name: 'SHEET_FILE', defaultValue: '', description: 'Optional - path to an alternate workbook (overrides test_sheet_file from config.yaml). Leave blank to use testsheets/TestSuite.xlsx.')
-			string(name: 'WORKERS', defaultValue: '2', description: 'Parallel worker processes per sheet run.')
-			choice(name: 'BROWSER', choices: ['chromium', 'firefox', 'webkit'], description: 'Browser engine for this run.')
-			booleanParam(name: 'HEADED', defaultValue: false, description: 'Run with a visible browser instead of headless - only meaningful on an agent with a desktop session to actually watch it on.')
-			string(name: 'BASE_URL', defaultValue: '', description: 'Optional - point this run at a different environment (e.g. staging) than base_url in config.yaml. Leave blank to use config.yaml as-is.')
-			booleanParam(name: 'NO_SCREENSHOTS', defaultValue: false, description: 'Skip failure screenshots for this run - smaller/faster report, less detail to debug from.')
-			string(name: 'SLOW_MO_MS', defaultValue: '0', description: 'Milliseconds of delay Playwright adds between actions - only useful paired with HEADED for a live demo/walkthrough. 0 = off.')
-			choice(name: 'EMAIL_SEND_ON_OVERRIDE', choices: ['AUTO', 'always', 'failure_only'], description: 'AUTO (default) keeps the existing rule: always for Regression, failure_only for Smoke. Pick always/failure_only to force one regardless of SUITE for this build only.')
-			string(name: 'EXTRA_EMAIL_TO', defaultValue: '', description: 'Optional extra recipient(s) for this build\'s run-notification email, comma-separated. Added on top of email.to_addresses in config.yaml for THIS build only - does not change config.yaml.')
-		}
+    parameters {
+        choice(
+            name: 'SUITE',
+            choices: ['Smoke', 'Regression'],
+            description: 'Used only for a manual build - push/nightly decide this automatically.'
+        )
 
-		options {
-			timestamps()
-			disableConcurrentBuilds()
-		}
+        string(
+            name: 'SHEET_NAME',
+            defaultValue: 'ALL',
+            description: 'ALL runs every sheet found in the selected Excel workbook. Enter an exact sheet/tab name to run only that sheet, or SessionDemo to run SessionSave -> SessionReuse sequentially.'
+        )
 
-		environment {
-			// Injects the Jenkins Credentials entry named 'smtp-password' as
-			// SMTP_PASSWORD in every step's process environment - this is what
-			// core/notifier.py actually reads (os.environ.get("SMTP_PASSWORD")),
-			// so the secret never touches config.yaml or this file in plaintext.
-			SMTP_PASSWORD = credentials('smtp-password')
-		}
+        string(
+            name: 'SHEET_FILE',
+            defaultValue: '',
+            description: 'Optional Excel workbook path. Leave blank to use test_sheet_file from config.yaml.'
+        )
 
-		stages {
-			stage('Determine suite') {
-				steps {
-					script {
-						if (currentBuild.getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause')) {
-							env.SUITE = 'Regression'
-						} else if (currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')) {
-							env.SUITE = params.SUITE
-						} else {
-							env.SUITE = 'Smoke'   // push / webhook-triggered
-						}
-						echo "Running Suite=${env.SUITE} (trigger-derived, not just the SUITE parameter)"
-					}
-				}
-			}
+        string(
+            name: 'WORKERS',
+            defaultValue: '2',
+            description: 'Parallel worker processes per sheet run.'
+        )
 
-			stage('Validate sheet parameters') {
-				steps {
-					script {
-						// ALL means "loop over the six known demo-sheet names",
-						// which are only guaranteed to exist in the default
-						// workbook. A custom SHEET_FILE has no such guarantee -
-						// failing here, before any browser/venv setup, beats
-						// discovering the mismatch three stages later as an
-						// opaque openpyxl error from inside core/excel_reader.py.
-						if (params.SHEET_FILE?.trim() && params.SHEET_NAME == 'ALL') {
-							error("SHEET_NAME=ALL only applies to the default demo workbook. " +
-								  "You set SHEET_FILE='${params.SHEET_FILE.trim()}' - re-run with an " +
-								  "explicit SHEET_NAME matching an actual tab in that file.")
-						}
-					}
-				}
-			}
+        choice(
+            name: 'BROWSER',
+            choices: ['chromium', 'firefox', 'webkit'],
+            description: 'Browser engine for this run.'
+        )
 
-			stage('Compute run flags') {
-				steps {
-					script {
-						// Single place that turns build parameters into runner.py CLI flags,
-						// so the sheet-matrix stage and the session-demo stage can't drift out
-						// of sync with each other. Every optional param that's blank/unset
-						// here simply means "use whatever config.yaml already says" - runner.py
-						// only overrides a config.yaml value when the flag is actually passed.
-						def flags = []
-						flags << "--workers ${params.WORKERS?.trim() ?: '2'}"
-						flags << "--browser ${params.BROWSER}"
-						if (params.SHEET_FILE?.trim())   flags << "--sheet-file \"${params.SHEET_FILE.trim()}\""
-						if (params.HEADED)                flags << "--headed"
-						if (params.BASE_URL?.trim())      flags << "--base-url \"${params.BASE_URL.trim()}\""
-						if (params.NO_SCREENSHOTS)        flags << "--no-screenshot"
-						if (params.SLOW_MO_MS?.trim() && params.SLOW_MO_MS.trim() != '0') {
-							flags << "--slow-mo ${params.SLOW_MO_MS.trim()}"
-						}
+        booleanParam(
+            name: 'HEADED',
+            defaultValue: false,
+            description: 'Run with a visible browser.'
+        )
 
-						// Regression is the deliberate, less-frequent run (nightly cron or
-						// manual choice) - worth a notification either way, so send_on=always
-						// there. Smoke fires on every push and stays failure_only, or a green
-						// build would email the team on every commit. EMAIL_SEND_ON_OVERRIDE
-						// lets a manual build force one or the other regardless of that rule.
-						def emailSendOn = (params.EMAIL_SEND_ON_OVERRIDE && params.EMAIL_SEND_ON_OVERRIDE != 'AUTO') \
-							? params.EMAIL_SEND_ON_OVERRIDE \
-							: ((env.SUITE == 'Regression') ? 'always' : 'failure_only')
-						flags << "--email-send-on ${emailSendOn}"
-						if (params.EXTRA_EMAIL_TO?.trim()) flags << "--email-extra-to \"${params.EXTRA_EMAIL_TO.trim()}\""
+        string(
+            name: 'BASE_URL',
+            defaultValue: '',
+            description: 'Optional environment URL override.'
+        )
 
-						env.RUN_FLAGS = flags.join(' ')
-						echo "Computed run flags: ${env.RUN_FLAGS}"
-					}
-				}
-			}
+        booleanParam(
+            name: 'NO_SCREENSHOTS',
+            defaultValue: false,
+            description: 'Skip failure screenshots for this run.'
+        )
 
-			stage('Clean workspace') {
-				steps {
-					cleanWs()
-				}
-			}
+        string(
+            name: 'SLOW_MO_MS',
+            defaultValue: '0',
+            description: 'Playwright action delay in milliseconds.'
+        )
 
-			stage('Checkout') {
-				steps {
-					checkout scm
-				}
-			}
+        choice(
+            name: 'EMAIL_SEND_ON_OVERRIDE',
+            choices: ['AUTO', 'always', 'failure_only'],
+            description: 'AUTO keeps the existing suite-based email behavior.'
+        )
 
-			stage('Install dependencies') {
-				steps {
-					bat """
-						py -m venv .venv
-						call .venv\\Scripts\\activate.bat
-						python -m pip install --upgrade pip
-						pip install -r requirements.txt
-						python -m playwright install ${params.BROWSER}
-					"""
-				}
-			}
+        string(
+            name: 'EXTRA_EMAIL_TO',
+            defaultValue: '',
+            description: 'Optional extra recipient(s) for this build notification, comma-separated.'
+        )
+    }
 
-			stage('Run test sheets') {
-				when { expression { params.SHEET_NAME == 'ALL' || params.SHEET_NAME != 'SessionDemo' } }
-				steps {
-					script {
-						// Same set as the GitHub Actions matrix, run sequentially
-						// here rather than in parallel { } - keeps Jenkins agent
-						// resource usage predictable and the failure output in one
-						// readable console log, at the cost of wall-clock time.
-						// Switch to a `parallel` block if that trade-off stops
-						// being the right one once real test volume grows.
-						def allSheets = ['TestSteps', 'ParallelDemo', 'ApiDemo', 'RestfulBookerDemo', 'DummyJsonDemo', 'SchemaContractDemo']
-						def sheets = (params.SHEET_NAME == 'ALL') ? allSheets : [params.SHEET_NAME]
-						for (sheet in sheets) {
-							bat """
-								call .venv\\Scripts\\activate.bat
-								python tests\\runner.py --sheet-name ${sheet} --suite ${env.SUITE} ${env.RUN_FLAGS}
-							"""
-						}
-					}
-				}
-			}
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
 
-			stage('Run session demo (ordered)') {
-				when { expression { params.SHEET_NAME == 'ALL' || params.SHEET_NAME == 'SessionDemo' } }
-				steps {
-					// SessionSave then SessionReuse, same reasoning as the
-					// GitHub Actions job of the same name - these can't be in
-					// the sheets list above because order matters between them.
-					bat """
-						call .venv\\Scripts\\activate.bat
-						python tests\\runner.py --sheet-name SessionSave --suite ${env.SUITE} ${env.RUN_FLAGS}
-						python tests\\runner.py --sheet-name SessionReuse --suite ${env.SUITE} ${env.RUN_FLAGS}
-					"""
-				}
-			}
-		}
+    environment {
+        SMTP_PASSWORD = credentials('smtp-password')
+    }
 
-	post {
-		always {
-			archiveArtifacts(
-				artifacts: 'reports/**, logs/**',
-				allowEmptyArchive: true,
-				fingerprint: false
-			)
+    stages {
 
-			publishHTML([
-				allowMissing: true,
-				alwaysLinkToLastBuild: true,
-				keepAll: true,
-				reportDir: 'reports',
-				reportFiles: 'report_*.html',
-				reportName: 'Execution Report',
-				reportTitles: 'Keyword Framework - Execution Report'
-			])
+        stage('Determine suite') {
+            steps {
+                script {
+                    if (currentBuild.getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause')) {
+                        env.SUITE = 'Regression'
+                    } else if (currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')) {
+                        env.SUITE = params.SUITE
+                    } else {
+                        env.SUITE = 'Smoke'
+                    }
 
-			allure([
-				includeProperties: false,
-				jdk: '',
-				results: [
-					[path: 'reports/allure-results']
-				]
-			])
-		}
-	}
-	}
+                    echo "Running Suite=${env.SUITE}"
+                }
+            }
+        }
+
+        stage('Compute run flags') {
+            steps {
+                script {
+                    def flags = []
+
+                    flags << "--workers ${params.WORKERS?.trim() ?: '2'}"
+                    flags << "--browser ${params.BROWSER}"
+
+                    if (params.SHEET_FILE?.trim()) {
+                        flags << "--sheet-file \"${params.SHEET_FILE.trim()}\""
+                    }
+
+                    if (params.HEADED) {
+                        flags << "--headed"
+                    }
+
+                    if (params.BASE_URL?.trim()) {
+                        flags << "--base-url \"${params.BASE_URL.trim()}\""
+                    }
+
+                    if (params.NO_SCREENSHOTS) {
+                        flags << "--no-screenshot"
+                    }
+
+                    if (params.SLOW_MO_MS?.trim() && params.SLOW_MO_MS.trim() != '0') {
+                        flags << "--slow-mo ${params.SLOW_MO_MS.trim()}"
+                    }
+
+                    def emailSendOn =
+                        (params.EMAIL_SEND_ON_OVERRIDE &&
+                         params.EMAIL_SEND_ON_OVERRIDE != 'AUTO')
+                            ? params.EMAIL_SEND_ON_OVERRIDE
+                            : ((env.SUITE == 'Regression') ? 'always' : 'failure_only')
+
+                    flags << "--email-send-on ${emailSendOn}"
+
+                    if (params.EXTRA_EMAIL_TO?.trim()) {
+                        flags << "--email-extra-to \"${params.EXTRA_EMAIL_TO.trim()}\""
+                    }
+
+                    env.RUN_FLAGS = flags.join(' ')
+
+                    echo "Computed run flags: ${env.RUN_FLAGS}"
+                }
+            }
+        }
+
+        stage('Clean workspace') {
+            steps {
+                cleanWs()
+            }
+        }
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Install dependencies') {
+            steps {
+                bat """
+                    py -m venv .venv
+                    call .venv\\Scripts\\activate.bat
+                    python -m pip install --upgrade pip
+                    pip install -r requirements.txt
+                    python -m playwright install ${params.BROWSER}
+                """
+            }
+        }
+
+        stage('Resolve Excel workbook') {
+            steps {
+                script {
+                    /*
+                     * Determine the workbook that will actually be used.
+                     *
+                     * If SHEET_FILE is supplied, use it.
+                     * Otherwise read test_sheet_file from config.yaml.
+                     */
+                    def workbookPath = params.SHEET_FILE?.trim()
+
+                    if (!workbookPath) {
+                        workbookPath = bat(
+                            returnStdout: true,
+                            script: '''
+                                call .venv\\Scripts\\activate.bat
+                                python -c "import yaml; print((yaml.safe_load(open('config/config.yaml', encoding='utf-8')) or {}).get('test_sheet_file', 'testsheets/TestSuite.xlsx'))"
+                            '''
+                        ).trim()
+                    }
+
+                    env.ACTIVE_SHEET_FILE = workbookPath
+
+                    echo "Excel workbook selected: ${env.ACTIVE_SHEET_FILE}"
+
+                    if (!fileExists(env.ACTIVE_SHEET_FILE)) {
+                        error("Excel workbook not found: ${env.ACTIVE_SHEET_FILE}")
+                    }
+                }
+            }
+        }
+
+        stage('Resolve Excel sheets') {
+            steps {
+                script {
+
+                    if (params.SHEET_NAME?.trim() == 'SessionDemo') {
+                        echo "SessionDemo selected - SessionSave -> SessionReuse will run sequentially."
+                        env.RUN_SHEETS = ''
+                        return
+                    }
+
+                    /*
+                     * If a specific sheet was supplied, don't inspect or assume
+                     * anything about the workbook.
+                     */
+                    if (params.SHEET_NAME?.trim() &&
+                        params.SHEET_NAME.trim() != 'ALL') {
+
+                        env.RUN_SHEETS = params.SHEET_NAME.trim()
+
+                        echo "Selected Excel sheet: ${env.RUN_SHEETS}"
+                        return
+                    }
+
+                    /*
+                     * SHEET_NAME=ALL:
+                     * Dynamically discover the tabs from the ACTUAL workbook.
+                     *
+                     * There is deliberately no hardcoded TestSuite.xlsx
+                     * sheet list here.
+                     */
+                    def discoveredSheets = bat(
+                        returnStdout: true,
+                        script: """
+                            call .venv\\\\Scripts\\\\activate.bat
+                            python -c "import openpyxl; wb=openpyxl.load_workbook(r'${env.ACTIVE_SHEET_FILE}', read_only=True); print('|'.join(wb.sheetnames)); wb.close()"
+                        """
+                    ).trim()
+
+                    if (!discoveredSheets) {
+                        error("No worksheets found in Excel workbook: ${env.ACTIVE_SHEET_FILE}")
+                    }
+
+                    def allSheets = discoveredSheets
+                        .split('\\|')
+                        .collect { it.trim() }
+                        .findAll { it }
+
+                    /*
+                     * SessionSave and SessionReuse must remain ordered.
+                     * Remove them from the normal sheet loop and execute them
+                     * in the dedicated sequential stage below.
+                     */
+                    def sessionSheets = ['SessionSave', 'SessionReuse']
+
+                    def normalSheets = allSheets.findAll {
+                        !sessionSheets.contains(it)
+                    }
+
+                    env.RUN_SHEETS = normalSheets.join('|')
+                    env.HAS_SESSION_SHEETS =
+                        allSheets.any { sessionSheets.contains(it) }
+                            ? 'true'
+                            : 'false'
+
+                    echo "Discovered Excel sheets: ${allSheets.join(', ')}"
+                    echo "Normal sheets: ${normalSheets.join(', ')}"
+
+                    if (env.HAS_SESSION_SHEETS == 'true') {
+                        echo "SessionSave/SessionReuse detected. They will run sequentially."
+                    }
+                }
+            }
+        }
+
+        stage('Run test sheets') {
+            when {
+                expression {
+                    params.SHEET_NAME?.trim() != 'SessionDemo'
+                }
+            }
+
+            steps {
+                script {
+
+                    def sheets = env.RUN_SHEETS
+                        ? env.RUN_SHEETS.split('\\|').collect { it.trim() }.findAll { it }
+                        : []
+
+                    if (sheets.isEmpty()) {
+                        echo "No normal Excel sheets selected."
+                        return
+                    }
+
+                    for (sheet in sheets) {
+
+                        echo "Running Excel sheet: ${sheet}"
+
+                        bat """
+                            call .venv\\Scripts\\activate.bat
+                            python tests\\runner.py --sheet-name "${sheet}" --suite ${env.SUITE} ${env.RUN_FLAGS}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Run session demo (ordered)') {
+            when {
+                expression {
+                    params.SHEET_NAME?.trim() == 'SessionDemo' ||
+                    env.HAS_SESSION_SHEETS == 'true'
+                }
+            }
+
+            steps {
+                bat """
+                    call .venv\\Scripts\\activate.bat
+                    python tests\\runner.py --sheet-name SessionSave --suite ${env.SUITE} ${env.RUN_FLAGS}
+                    python tests\\runner.py --sheet-name SessionReuse --suite ${env.SUITE} ${env.RUN_FLAGS}
+                """
+            }
+        }
+    }
+
+    post {
+        always {
+
+            archiveArtifacts(
+                artifacts: 'reports/**, logs/**',
+                allowEmptyArchive: true,
+                fingerprint: false
+            )
+
+            publishHTML([
+                allowMissing: true,
+                alwaysLinkToLastBuild: true,
+                keepAll: true,
+                reportDir: 'reports',
+                reportFiles: 'report_*.html',
+                reportName: 'Execution Report',
+                reportTitles: 'Keyword Framework - Execution Report'
+            ])
+
+            allure([
+                includeProperties: false,
+                jdk: '',
+                results: [
+                    [path: 'reports/allure-results']
+                ]
+            ])
+        }
+    }
+}
