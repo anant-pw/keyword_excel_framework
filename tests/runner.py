@@ -205,6 +205,8 @@ def run_test_case(page, test_case, config, fail_fast: bool) -> CaseResult:
         source_sheet=config.sheet_name,
     )
     case_properties = CasePropertyStore(config.properties_dir, config.env_variables)
+    for var_name, var_value in test_case.data_row.items():
+        case_properties.capture(var_name, var_value)
     api_context = ApiCallContext()
     case_start = time.time()
 

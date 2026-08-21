@@ -35,10 +35,29 @@ Column schema - matches TC.xlsx's actual semantics:
   fixed set of keywords know how to produce a capturable result - see
   SAVE_AS_CAPABLE below; using SaveAs on any other keyword is a sheet
   error caught here at load time, not a silent no-op at run time.
+- DataSource: OPTIONAL column, absent from older sheets without breaking
+  them (same pattern as SaveAs). Only the FIRST row of a Test Scenario is
+  consulted - it's a scenario-level attribute, not a per-step one, so
+  later rows don't need it repeated (unlike Suite). When set to a sheet
+  name (e.g. "LoginCreds"), that scenario is data-driven: this function
+  loads the named sheet as a data table (see _load_data_table below) and
+  expands the ONE scenario definition into N TestCase objects, one per
+  data row - identical steps, different captured $variables. Each
+  expanded case's test_scenario becomes "<original> [<Label>]", so the
+  report shows which data row a failure belongs to instead of a bare
+  index. A data table sheet's own header row becomes the $variable names
+  available to that case's steps (via CasePropertyStore.capture, the
+  same mechanism SaveAs already uses) - no new $-syntax, no new resolver.
+  A data table MUST have a "Label" column; every other column becomes a
+  variable. Suite filtering still applies per the base scenario's step
+  Suite tags - unaffected by which/how-many data rows exist, since every
+  expanded case shares the exact same step list (and therefore Suite
+  values); only the captured variables differ per case.
 """
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections import OrderedDict
+import re
 import openpyxl
 
 from core.exceptions import InvalidTestDataError
@@ -99,12 +118,14 @@ class TestStep:
     expected_output: str
     suite: str
     save_as: str = ""
+    data_source: str = ""
 
 
 @dataclass
 class TestCase:
     test_scenario: str
     steps: list = field(default_factory=list)
+    data_row: dict = field(default_factory=dict)  # {} for a non-data-driven case
 
 
 def _clean(value) -> str:
@@ -119,6 +140,70 @@ def _suite_list(suite_cell: str) -> list:
     if not suite_cell:
         return []
     return [s.strip().lower() for s in suite_cell.split(",") if s.strip()]
+
+
+_DATA_VAR_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _load_data_table(wb, sheet_name: str) -> list:
+    """Loads a DataSource sheet into a list of dicts, one per data row,
+    e.g. {'Label': 'Valid login', 'username': 'demo', 'password': 'demo123'}.
+    Every column except Label becomes a $variable captured into the
+    CasePropertyStore for that iteration (see tests/runner.py). Fails
+    loudly on any structural problem - a typo'd variable name or a missing
+    Label should never surface as a confusing failure three steps into a
+    run; it should surface here, at load time, before any browser opens."""
+    if sheet_name not in wb.sheetnames:
+        raise InvalidTestDataError(
+            f"DataSource '{sheet_name}' not found. Available sheets: {wb.sheetnames}"
+        )
+    ws = wb[sheet_name]
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        raise InvalidTestDataError(f"DataSource sheet '{sheet_name}' is empty")
+
+    header = [str(h).strip() if h else "" for h in rows[0]]
+    if "Label" not in header:
+        raise InvalidTestDataError(
+            f"DataSource sheet '{sheet_name}' must have a 'Label' column identifying each "
+            f"data row for the report - none found. Columns present: {header}"
+        )
+    var_cols = [h for h in header if h and h != "Label"]
+    if not var_cols:
+        raise InvalidTestDataError(
+            f"DataSource sheet '{sheet_name}' has a 'Label' column but no data columns - "
+            f"nothing to capture as $variables."
+        )
+    for h in var_cols:
+        if not _DATA_VAR_NAME.match(h):
+            raise InvalidTestDataError(
+                f"DataSource sheet '{sheet_name}': column '{h}' isn't a valid $variable name "
+                f"(must match {_DATA_VAR_NAME.pattern}) - rename the column header."
+            )
+
+    data_rows = []
+    for row_num, row in enumerate(rows[1:], start=2):
+        if row is None or all(v is None for v in row):
+            continue
+        row_dict = {h: _clean(row[i]) for i, h in enumerate(header) if h}
+        if not row_dict.get("Label"):
+            raise InvalidTestDataError(
+                f"DataSource sheet '{sheet_name}', row {row_num}: Label is required on every row."
+            )
+        data_rows.append(row_dict)
+
+    if not data_rows:
+        raise InvalidTestDataError(f"DataSource sheet '{sheet_name}' has a header but zero data rows")
+
+    labels = [r["Label"] for r in data_rows]
+    dupes = sorted({label for label in labels if labels.count(label) > 1})
+    if dupes:
+        raise InvalidTestDataError(
+            f"DataSource sheet '{sheet_name}' has duplicate Label value(s): {dupes} - labels "
+            f"must be unique so report entries stay distinguishable."
+        )
+
+    return data_rows
 
 
 def read_test_suite(file_path: str, sheet_name: str = "TestSteps", suite_filter: str = None) -> list:
@@ -176,6 +261,9 @@ def read_test_suite(file_path: str, sheet_name: str = "TestSteps", suite_filter:
                 f"{sorted(SAVE_AS_CAPABLE)}"
             )
 
+        data_source_col = col_idx.get("DataSource")  # optional column - see module docstring
+        data_source = _clean(row[data_source_col]) if data_source_col is not None else ""
+
         step = TestStep(
             row_id=int(row_id_raw),
             test_scenario=_clean(row[col_idx["Test Scenario"]]),
@@ -187,6 +275,7 @@ def read_test_suite(file_path: str, sheet_name: str = "TestSteps", suite_filter:
             expected_output=_clean(row[col_idx["Expected Output"]]),
             suite=_clean(row[col_idx["Suite"]]),
             save_as=save_as,
+            data_source=data_source,
         )
         all_steps.append(step)
 
@@ -212,7 +301,20 @@ def read_test_suite(file_path: str, sheet_name: str = "TestSteps", suite_filter:
             steps = [s for s in steps if wanted in _suite_list(s.suite)]
             if not steps:
                 continue
-        result.append(TestCase(test_scenario=scenario, steps=steps))
+
+        data_source = steps[0].data_source  # scenario-level attribute - only first row consulted
+        if not data_source:
+            result.append(TestCase(test_scenario=scenario, steps=steps))
+            continue
+
+        for row_dict in _load_data_table(wb, data_source):
+            row_dict = dict(row_dict)  # don't mutate _load_data_table's own copy
+            label = row_dict.pop("Label")
+            result.append(TestCase(
+                test_scenario=f"{scenario} [{label}]",
+                steps=steps,
+                data_row=row_dict,
+            ))
 
     if suite_filter:
         logger.info(f"Filtered to Suite='{suite_filter}': {len(result)} test case(s)")

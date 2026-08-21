@@ -96,6 +96,40 @@ def test_no_screenshot_attempt_when_disabled(monkeypatch, tmp_path):
     page.screenshot.assert_not_called()
 
 
+def test_data_row_captured_before_steps_run(monkeypatch, tmp_path):
+    """A data-driven case's data_row must be captured into the
+    CasePropertyStore BEFORE _execute_steps runs - a step referencing
+    $username on row 1 needs it to already resolve, not just by the time
+    the case finishes."""
+    seen = {}
+
+    def fake_execute(page, step, config, case_properties, api_context):
+        seen["username"] = case_properties.resolve("$username")
+    monkeypatch.setattr(runner, "execute_step", fake_execute)
+
+    case = make_case(1)
+    case.data_row = {"username": "demo_user"}
+    runner.run_test_case(MagicMock(), case, make_config(tmp_path), fail_fast=True)
+
+    assert seen["username"] == "demo_user"
+
+
+def test_non_data_driven_case_has_no_captured_variables(monkeypatch, tmp_path):
+    """A case with an empty data_row (the default) shouldn't capture
+    anything - confirms the seeding loop is a no-op when there's nothing
+    to seed, not a change in behavior for every existing case."""
+    seen = {}
+
+    def fake_execute(page, step, config, case_properties, api_context):
+        seen["captured"] = dict(case_properties._captured)
+    monkeypatch.setattr(runner, "execute_step", fake_execute)
+
+    case = make_case(1)
+    runner.run_test_case(MagicMock(), case, make_config(tmp_path), fail_fast=True)
+
+    assert seen["captured"] == {}
+
+
 def test_unexpected_non_framework_error_behaves_same_as_framework_error(monkeypatch, tmp_path):
     """A bug worth pinning down: an unexpected (non-FrameworkError) exception
     should be handled the same way as a FrameworkError - fail-fast still
