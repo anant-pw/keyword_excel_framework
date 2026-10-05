@@ -5,6 +5,10 @@ a spreadsheet, not as code. QA engineers who don't write Python can add and
 maintain test cases; the Python layer only needs to grow when a genuinely
 new keyword is needed.
 
+This is a personal project. It runs only against public demo sites
+(duckduckgo, dummyjson, restful-booker, httpbin) and contains no employer or
+client code, data or test cases.
+
 ## Architecture
 
 ```
@@ -54,19 +58,19 @@ logs/                        - one timestamped log file per run
 
 | Column | Meaning |
 |---|---|
-| TestCase ID | Groups rows into one test case |
-| Test Scenario | Short display name for the case |
-| Test Case Description | What the case verifies (documentation) |
-| StepNo | Execution order within the test case |
+| TestCase ID | Sequential row number; sort order is execution order |
+| Test Scenario | Grouping key: all rows sharing a Test Scenario form one test case |
+| Test Case Description | What this step does (shown in the report) |
 | Keyword/Action | Must match a registered keyword (see list below) |
 | LocatorType | `id` \| `css` \| `xpath` \| `text` \| `role` \| `testid` \| `placeholder` \| `name` \| `any` |
 | LocatorValue | Locator value, a `$name` reference, or a JSON object of strategies when LocatorType=`any` |
 | Test Data | Input value / URL / expected text - also accepts a `$name` reference |
 | Expected Output | Human-readable description (documentation only, not evaluated) |
-| Suite | `Smoke` \| `Sanity` \| `Regression` - drives failure behavior, see below |
-| Priority | `High` \| `Medium` \| `Low` - for selective runs (not yet wired into the CLI) |
-| Enabled | `TRUE`/`FALSE` - disable a step without deleting it |
-| Comments | Free text |
+| Suite | `Smoke` \| `Sanity` \| `Regression`, per step, comma-separated for more than one. A step runs only when the requested suite is in its list; a blank Suite never runs |
+| SaveAs | Optional. Captures the step's result under a name that later steps in the same case can reference as `$name` |
+| DataSource | Optional, first row of a scenario only. Names a data sheet in the same workbook; the scenario runs once per data row |
+
+The authoritative schema is the module docstring in `core/excel_reader.py`.
 
 `DependsOn` was deliberately left out - see "Design decisions" below.
 
@@ -118,11 +122,21 @@ Enforced in `tests/runner.py` via `FAIL_FAST_SUITES`.
 
 ## Registered keywords
 
-LoadProperties, Navigate, Back, Forward, Refresh, AcceptAlert, DismissAlert,
-SwitchToWindow, CloseWindow, Click, ClickByJavaScript, Type, TypeSlowly,
-Clear, Hover, SelectDropdown, Check, Uncheck, ScrollIntoView,
-ElementDisplayed, ElementNotDisplayed, ElementEnabled, VerifyText,
-VerifyTextContains, VerifyURL, VerifyTitle, Wait, WaitForElement, Screenshot.
+Browser: Navigate, Back, Forward, Refresh, AcceptAlert, DismissAlert,
+SwitchToWindow, CloseWindow.
+
+Elements: Click, ClickByJavaScript, Type, TypeSlowly, Clear, Hover,
+SelectDropdown, Check, Uncheck, ScrollIntoView, SaveText, SaveAttribute,
+SaveValue.
+
+Assertions: ElementDisplayed, ElementNotDisplayed, ElementEnabled, VerifyText,
+VerifyTextContains, VerifyURL, VerifyTitle.
+
+API: ApiGet, ApiPost, ApiPut, ApiPatch, ApiDelete, ApiSetHeader,
+VerifyStatusCode, VerifyResponseContains, SaveJsonPath, VerifyJsonSchema.
+
+Utility: LoadProperties, Wait, WaitForElement, GenerateValue, SaveSession,
+UseSession, Screenshot.
 
 ## Adding a new keyword
 
@@ -231,13 +245,13 @@ table across the last `history_limit` runs, plus an accordion per test case
 ## Design decisions worth knowing (and one deliberately rejected)
 
 - **Rejected: a continuous-flow-per-sheet model** (one long scripted journey
-  per sheet, suite tagged per-step rather than per-case) - closer to how a
-  real production framework this was modeled on works. Not used here because
+  per sheet), the way many traditional keyword-driven frameworks are built.
+  Not used here because
   it can't be parallelized (step 40 can depend on step 3's session) and is
   hard to unit-test in isolation. This framework keeps discrete,
   independent `TestCaseID`-grouped cases instead, each getting its own
   browser context - the tradeoff that actually supports parallel execution
-  and self-tests, both of which are on the roadmap below.
+  and self-tests.
 - **`DependsOn` intentionally omitted** - per project decision, not
   implemented in this pass.
 - **Properties are scoped per test case**, not global - `LoadProperties`
@@ -246,13 +260,19 @@ table across the last `history_limit` runs, plus an accordion per test case
 
 ## Known gaps / next steps
 
-- No cross-step variable capture within a case (e.g. reading a generated ID
-  in step 2 and reusing it in step 5) - next up.
-- No CI integration wired up yet, and no AI-assisted verdict classification
-  (GENUINE_FAIL / FLAKY / ENV_ISSUE / etc.) - both deliberately deferred to
-  a later pass.
+- No failure classification (GENUINE_FAIL / FLAKY / ENV_ISSUE / etc.) -
+  deliberately deferred to a later pass.
+- Assertion keywords check once and do not retry, and no Playwright trace
+  is recorded on failure.
+- The keyword modules under `keywords/` have no unit tests of their own;
+  they are exercised only by the demo sheets, which CI runs against live
+  third-party sites.
 - Parallel execution splits by test case, not by suite - running cases
   concurrently against a stateful backend could still collide if two cases
   share server-side state (e.g. the same account). Not an issue with this
   framework's local demo pages, but worth knowing before pointing
   `--workers` at a real environment with shared test data.
+
+## License
+
+MIT - see `LICENSE`.
